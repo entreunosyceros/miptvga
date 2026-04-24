@@ -1,4 +1,7 @@
 # miptvga
+<div align="center">
+<img width="781" height="757" alt="miptvga" src="https://github.com/user-attachments/assets/9c21a4fb-6e74-4ac4-9f1e-2cbb22f58f8e" />
+</div>
 
 Aplicación IPTV para **Android TV** y cajas Android orientada a listas M3U grandes. Permite cargar listas por URL o desde archivo local, navegar por grupos y canales, marcar favoritos y reproducir emisiones en directo con una interfaz pensada para televisor y mando a distancia.
 
