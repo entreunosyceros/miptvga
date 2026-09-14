@@ -303,6 +303,9 @@ internal class MainViewModel(
         if (index !in _uiState.value.channels.indices) return
         if (_uiState.value.selectedIndex == index && _uiState.value.controlsVisible) return
         val channel = _uiState.value.channels[index]
+        // Drop the previous Xtream keep-alive immediately so the panel frees the slot
+        // before the player opens the next stream.
+        stopXtreamKeepAlive()
         _uiState.value = _uiState.value.copy(
             selectedIndex = index,
             selectedVisibleIndex = filteredIndexByOriginalIndex[index] ?: -1,
@@ -311,9 +314,6 @@ internal class MainViewModel(
             playbackMessage = "Abriendo canal…",
             playbackMessageIsError = false
         )
-        // Start Xtream session ping ASAP so the panel does not drop the connection
-        // while the player is still connecting.
-        restartXtreamKeepAliveIfNeeded(forceRestart = true)
     }
 
     fun showControls(show: Boolean) {
@@ -477,7 +477,7 @@ internal class MainViewModel(
             playbackMessageIsError = false,
             isLoading = false
         )
-        restartXtreamKeepAliveIfNeeded(forceRestart = false)
+        restartXtreamKeepAliveIfNeeded(forceRestart = true)
     }
 
     fun onPlaybackReconnectScheduled(channelName: String) {

@@ -78,6 +78,9 @@ private const val VlcXtreamLiveCachingMs = 5_000
 private const val PlaybackSeekStepMillis = 10_000L
 private const val PlaybackStatePollingMillis = 500L
 private const val FullscreenTransitionGuardMillis = 1_100L
+/** Give IPTV panels time to free the previous client slot before opening the next stream. */
+private const val ChannelSwitchTeardownMillis = 350L
+private const val ChannelSwitchTeardownXtreamMillis = 550L
 private const val FullscreenTransitionRecoveryCheckMillis = 900L
 private val ProgressiveVodExtensions = setOf(
     ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".aac", ".flac", ".wav", ".m4a", ".webm", ".ogg"
@@ -315,6 +318,7 @@ private fun VlcPlayerSurface(
             playbackStateSnapshot.value = PlaybackControllerState()
             mediaPlayer.setEventListener(null)
             runCatching { mediaPlayer.stop() }
+            runCatching { mediaPlayer.media = null }
             runCatching { mediaPlayer.detachViews() }
             runCatching { mediaPlayer.release() }
             runCatching { libVlc.release() }
@@ -377,6 +381,7 @@ private fun VlcPlayerSurface(
         val sanitizedUrl = streamUrl.trim()
         if (sanitizedUrl.isBlank()) {
             runCatching { mediaPlayer.stop() }
+            runCatching { mediaPlayer.media = null }
             return@LaunchedEffect
         }
         if (!surfaceReady.value) return@LaunchedEffect
@@ -392,6 +397,15 @@ private fun VlcPlayerSurface(
         }
 
         runCatching {
+            // Close the previous HTTP/TS session before opening the next channel.
+            // Many IPTV panels only allow one concurrent connection per account.
+            mediaPlayer.stop()
+            mediaPlayer.media = null
+        }
+
+        kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
+
+        runCatching {
             reconnectPending.value = false
             val media = Media(libVlc, normalizePlaybackUri(sanitizedUrl)).apply {
                 setHWDecoderEnabled(true, false)
@@ -402,7 +416,6 @@ private fun VlcPlayerSurface(
                 addVlcHeaderOptions(requestHeaders)
                 addPlaybackSpecificOptions(sanitizedUrl)
             }
-            mediaPlayer.stop()
             mediaPlayer.media = media
             media.release()
             mediaPlayer.play()
@@ -535,24 +548,29 @@ private fun ExoPlayerSurface(
     }
     val usePlaybackCache = remember(streamUrl) { shouldUsePlaybackCache(streamUrl) }
     val effectiveRequestHeaders = remember(requestHeaders) { ensureIptvHeaders(requestHeaders) }
-    val exoPlayer = remember(applicationContext, effectiveRequestHeaders, usePlaybackCache, streamUrl) {
-        val dataSourceFactory = PlaybackCache.createDataSourceFactory(
-            context = applicationContext,
-            requestHeaders = effectiveRequestHeaders,
-            useCache = usePlaybackCache
-        )
+    // Keep one ExoPlayer instance across zapping. Recreating per URL briefly overlaps
+    // two network sessions and trips single-connection IPTV panels.
+    val exoPlayer = remember(applicationContext) {
         ExoPlayer.Builder(applicationContext)
             .setRenderersFactory(
                 DefaultRenderersFactory(applicationContext)
                     .setEnableDecoderFallback(true)
             )
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-            .setLoadControl(createExoLoadControlForStream(streamUrl))
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        ExoLiveMinBufferMs,
+                        ExoLiveMaxBufferMs,
+                        ExoLiveBufferForPlaybackMs,
+                        ExoLiveBufferForPlaybackAfterRebufferMs
+                    )
+                    .build()
+            )
             .build().apply {
                 setAudioAttributes(playerAudioAttributes, true)
                 setWakeMode(C.WAKE_MODE_NETWORK)
                 volume = 1f
-                playWhenReady = true
+                playWhenReady = false
             }
     }
 
@@ -668,6 +686,11 @@ private fun ExoPlayerSurface(
             playbackActionSnapshot.value = PlaybackControllerActions()
             playbackStateSnapshot.value = PlaybackControllerState()
             exoPlayer.removeListener(listener)
+            runCatching {
+                exoPlayer.playWhenReady = false
+                exoPlayer.stop()
+                exoPlayer.clearMediaItems()
+            }
             exoPlayer.release()
         }
     }
@@ -725,9 +748,10 @@ private fun ExoPlayerSurface(
         }
     }
 
-    LaunchedEffect(exoPlayer, streamUrl, reconnectToken.intValue) {
+    LaunchedEffect(exoPlayer, streamUrl, requestHeaders, reconnectToken.intValue) {
         val sanitizedUrl = streamUrl.trim()
         if (sanitizedUrl.isBlank()) {
+            exoPlayer.playWhenReady = false
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             return@LaunchedEffect
@@ -744,10 +768,24 @@ private fun ExoPlayerSurface(
         }
 
         runCatching {
-            reconnectPending.value = false
+            // Tear down the previous session before preparing the next channel.
+            exoPlayer.playWhenReady = false
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
-            exoPlayer.setMediaItem(buildMediaItem(sanitizedUrl, playbackUrlInfo))
+        }
+
+        kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
+
+        runCatching {
+            reconnectPending.value = false
+            val dataSourceFactory = PlaybackCache.createDataSourceFactory(
+                context = applicationContext,
+                requestHeaders = effectiveRequestHeaders,
+                useCache = usePlaybackCache
+            )
+            val mediaSource = DefaultMediaSourceFactory(dataSourceFactory)
+                .createMediaSource(buildMediaItem(sanitizedUrl, playbackUrlInfo))
+            exoPlayer.setMediaSource(mediaSource, /* resetPosition = */ true)
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
             exoPlayer.play()
@@ -1216,6 +1254,14 @@ private fun reconnectDelayMillis(attempt: Int, xtream: Boolean = false): Long {
     val baseDelay = initial * (1L shl (safeAttempt - 1).coerceAtMost(4))
     val jitter = (baseDelay * 0.2 * Math.random()).toLong()
     return (baseDelay + jitter).coerceAtMost(maxDelay)
+}
+
+private fun channelSwitchTeardownMillis(url: String): Long {
+    return if (isXtreamStreamUrl(url) || isLikelyLiveStream(url)) {
+        ChannelSwitchTeardownXtreamMillis
+    } else {
+        ChannelSwitchTeardownMillis
+    }
 }
 
 private fun maxReconnectAttemptsForStream(url: String, isLive: Boolean, error: PlaybackException? = null): Int {
