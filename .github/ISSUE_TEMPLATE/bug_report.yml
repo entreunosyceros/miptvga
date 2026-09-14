@@ -1,0 +1,112 @@
+name: Informe de error
+description: Algo no funciona como debería
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar un error en **miptvga**. Cuanta más información des, más fácil será reproducirlo.
+
+        ⚠️ No incluyas tokens ni URLs de listas/EPG/Xtream con usuario y contraseña.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área afectada
+      options:
+        - Reproductor VLC (zapping, audio/vídeo, reconexión)
+        - Reproductor ExoPlayer
+        - Xtream / keep-alive
+        - Listas M3U (carga URL/archivo, grupos, favoritos)
+        - Guía EPG / info de canal
+        - Búsqueda de canales
+        - Explorador de archivos
+        - UI / layout adaptativo (TV, tablet, móvil)
+        - Ajustes / preferencias
+        - Instalación del APK
+        - Otro
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versión
+      description: versionName de la app (p. ej. 1.1) o commit si compilas desde código fuente
+      placeholder: "1.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      description: Lista numerada de acciones hasta ver el fallo. No pegues URLs con credenciales.
+      placeholder: |
+        1. Abrir miptvga e instalar desde Releases / assembleDebug
+        2. Cargar lista M3U
+        3. Cambiar de canal / grupo
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamiento actual
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs o capturas
+      description: Logcat relevante o capturas (sin URLs ni credenciales)
+      render: shell
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Entorno
+      options:
+        - Android TV / Leanback
+        - Caja Android (TV box)
+        - Tablet
+        - Teléfono
+        - Emulador
+        - No lo sé
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Versión de Android
+      placeholder: "14 / API 34"
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend de reproducción
+      options:
+        - VLC
+        - ExoPlayer
+        - Ambos / no lo sé
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmación
+      options:
+        - label: He buscado en issues abiertas y cerradas y no he encontrado un duplicado
+          required: true
+        - label: Este informe no incluye tokens ni URLs con usuario y contraseña
+          required: true

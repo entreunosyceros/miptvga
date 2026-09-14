@@ -1,0 +1,58 @@
+name: Solicitud de mejora
+description: Proponer una nueva función o mejora
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe el problema o la necesidad antes que la solución concreta. Así es más fácil valorar la propuesta para **miptvga**.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Reproductor (VLC / ExoPlayer, zapping, OSD)
+        - Xtream / keep-alive / estabilidad IPTV
+        - Listas M3U (grupos, favoritos, listas grandes)
+        - Guía EPG / info de canal
+        - Búsqueda
+        - UI / layout adaptativo (TV, tablet, móvil)
+        - Explorador de archivos
+        - Ajustes / preferencias
+        - Documentación / Releases
+        - Otro
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: ¿Qué problema o necesidad quieres resolver?
+      placeholder: "Ej.: Al cambiar de canal en un panel de una sola conexión a veces falla el segundo intento."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solución propuesta (opcional)
+      description: Cómo imaginas que debería funcionar en miptvga
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Alcance
+      options:
+        - label: Estoy dispuesto/a a contribuir con un PR si la propuesta encaja
+          required: false
