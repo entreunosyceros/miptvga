@@ -790,6 +790,7 @@ private fun SearchScreen(
                 showChannelLogos = ui.showChannelLogos,
                 selectedIndex = ui.selectedIndex,
                 selectedVisibleIndex = ui.selectedVisibleIndex,
+                listResetKey = ui.searchQuery,
                 onToggleFavorite = vm::toggleFavorite,
                 onSelectChannel = {
                     vm.selectChannel(it)
@@ -2358,6 +2359,7 @@ private fun SidePanel(
                 showChannelLogos = showChannelLogos,
                 selectedIndex = selectedIndex,
                 selectedVisibleIndex = selectedVisibleIndex,
+                listResetKey = selectedGroupId,
                 focusRequestToken = channelListFocusToken,
                 onBackToGroups = null,
                 onToggleFavorite = onToggleFavorite,
@@ -2897,6 +2899,7 @@ private fun ChannelList(
     showChannelLogos: Boolean,
     selectedIndex: Int,
     selectedVisibleIndex: Int,
+    listResetKey: Any? = null,
     focusRequestToken: Int = 0,
     onBackToGroups: (() -> Unit)? = null,
     onToggleFavorite: (Int) -> Unit,
@@ -2922,14 +2925,18 @@ private fun ChannelList(
     }
 
     val listState = rememberLazyListState()
+    val focusOriginalIndex = filteredChannels.getOrNull(selectedVisibleIndex)?.originalIndex
 
-    LaunchedEffect(selectedVisibleIndex, filteredChannels.size) {
-        if (selectedVisibleIndex < 0 || filteredChannels.isEmpty()) return@LaunchedEffect
-
+    LaunchedEffect(listResetKey, selectedVisibleIndex, filteredChannels.size) {
+        if (filteredChannels.isEmpty()) return@LaunchedEffect
+        val targetIndex = when {
+            selectedVisibleIndex in filteredChannels.indices -> selectedVisibleIndex
+            else -> 0
+        }
         val visibleItems = listState.layoutInfo.visibleItemsInfo
-        val isAlreadyVisible = visibleItems.any { it.index == selectedVisibleIndex }
+        val isAlreadyVisible = visibleItems.any { it.index == targetIndex }
         if (!isAlreadyVisible) {
-            listState.scrollToItem(selectedVisibleIndex)
+            listState.scrollToItem(targetIndex)
         }
     }
 
@@ -2949,7 +2956,7 @@ private fun ChannelList(
                 currentProgram = currentProgramForChannel(entry.channel, currentPrograms),
                 showChannelLogos = showChannelLogos,
                 selected = entry.originalIndex == selectedIndex,
-                requestInitialFocus = selectedVisibleIndex >= 0 && filteredChannels.getOrNull(selectedVisibleIndex)?.originalIndex == entry.originalIndex,
+                requestInitialFocus = focusOriginalIndex != null && focusOriginalIndex == entry.originalIndex,
                 focusRequestToken = focusRequestToken,
                 onBackToGroups = onBackToGroups,
                 onToggleFavorite = onToggleFavorite,

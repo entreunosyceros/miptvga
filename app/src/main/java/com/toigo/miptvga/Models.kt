@@ -1,6 +1,7 @@
 package com.toigo.miptvga
 
 import androidx.compose.runtime.Immutable
+import java.util.LinkedHashMap
 
 internal const val AllChannelsGroupId = "__all__"
 internal const val FavoriteChannelsGroupId = "__favorites__"
@@ -197,16 +198,39 @@ internal data class UiState(
 @Immutable
 internal data class ChannelListEntry(
     val originalIndex: Int,
-    val channel: Channel
-) {
-    val groupTitle: String
-        get() = normalizedGroupTitle(channel.group)
-
-    val groupId: String
-        get() = groupIdForChannel(channel)
-
+    val channel: Channel,
+    val groupTitle: String,
+    val groupId: String,
     val favoriteId: String
-        get() = favoriteIdForChannel(channel)
+)
+
+internal fun ChannelListEntry(
+    originalIndex: Int,
+    channel: Channel
+): ChannelListEntry {
+    val groupTitle = normalizedGroupTitle(channel.group)
+    return ChannelListEntry(
+        originalIndex = originalIndex,
+        channel = channel,
+        groupTitle = groupTitle,
+        groupId = buildGroupId(groupTitle),
+        favoriteId = favoriteIdForChannel(channel)
+    )
+}
+
+/**
+ * Pre-indexes playlist entries by group for O(1) group switches on large lists.
+ */
+internal fun buildChannelsByGroupId(
+    entries: List<ChannelListEntry>
+): Map<String, List<ChannelListEntry>> {
+    if (entries.isEmpty()) return emptyMap()
+
+    val grouped = LinkedHashMap<String, MutableList<ChannelListEntry>>()
+    entries.forEach { entry ->
+        grouped.getOrPut(entry.groupId) { ArrayList() }.add(entry)
+    }
+    return grouped
 }
 
 @Immutable

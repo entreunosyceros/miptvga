@@ -52,6 +52,7 @@ internal class MainViewModel(
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private var indexedChannels: List<ChannelListEntry> = emptyList()
+    private var channelsByGroupId: Map<String, List<ChannelListEntry>> = emptyMap()
     private var cachedGroups: List<ChannelGroup> = emptyList()
     private var filteredIndexByOriginalIndex: Map<Int, Int> = emptyMap()
     private var browserRootPaths: Set<String> = emptySet()
@@ -267,8 +268,11 @@ internal class MainViewModel(
     fun selectGroup(groupId: String) {
         if (_uiState.value.selectedGroupId == groupId) return
         _uiState.value = _uiState.value.copy(selectedGroupId = groupId)
-        lastPlaylistStore.saveSelectedGroupId(groupId)
-        scheduleFiltering(immediate = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            lastPlaylistStore.saveSelectedGroupId(groupId)
+        }
+        // Group switches use a prebuilt index; apply on the main thread for instant UI.
+        scheduleFiltering(immediate = true, preferSync = true)
     }
 
     fun toggleFavorite(index: Int) {
@@ -840,6 +844,7 @@ internal class MainViewModel(
         }
 
         indexedChannels = prepared.indexedChannels
+        channelsByGroupId = prepared.channelsByGroupId
         cachedGroups = prepared.groups
         filteredIndexByOriginalIndex = emptyMap()
         filteredIndexByOriginalIndex = prepared.filterResult.indexByOriginalIndex
@@ -870,11 +875,12 @@ internal class MainViewModel(
         }
     }
 
-    private fun scheduleFiltering(immediate: Boolean) {
+    private fun scheduleFiltering(immediate: Boolean, preferSync: Boolean = false) {
         filterJob?.cancel()
 
         if (indexedChannels.isEmpty()) {
             cachedGroups = emptyList()
+            channelsByGroupId = emptyMap()
             filteredIndexByOriginalIndex = emptyMap()
             _uiState.value = _uiState.value.copy(
                 filteredChannels = emptyList(),
@@ -892,6 +898,37 @@ internal class MainViewModel(
         val favoriteGroupIdsSnapshot = _uiState.value.favoriteGroupIds
         val channelsSnapshot = _uiState.value.channels
         val selectedIndexSnapshot = _uiState.value.selectedIndex
+        val canApplySync =
+            preferSync &&
+                querySnapshot.isBlank() &&
+                selectedGroupIdSnapshot != FavoriteChannelsGroupId
+
+        fun applyFilterResult(filterResult: FilterResult, latestState: UiState = _uiState.value) {
+            filteredIndexByOriginalIndex = filterResult.indexByOriginalIndex
+            _uiState.value = latestState.copy(
+                filteredChannels = filterResult.filteredChannels,
+                groups = filterResult.groups,
+                selectedIndex = filterResult.selectedIndex,
+                selectedVisibleIndex = filterResult.selectedVisibleIndex
+            )
+        }
+
+        if (canApplySync) {
+            applyFilterResult(
+                computeFilterResult(
+                    entries = indexedChannels,
+                    channelsByGroupId = channelsByGroupId,
+                    selectedGroupId = selectedGroupIdSnapshot,
+                    searchQuery = querySnapshot,
+                    favoriteIds = favoriteIdsSnapshot,
+                    favoriteGroupIds = favoriteGroupIdsSnapshot,
+                    selectedIndex = selectedIndexSnapshot,
+                    groups = cachedGroups,
+                    preservePlaybackSelection = true
+                )
+            )
+            return
+        }
 
         filterJob = viewModelScope.launch {
             if (!immediate) delay(SearchDebounceMillis)
@@ -899,12 +936,14 @@ internal class MainViewModel(
             val filterResult = withContext(Dispatchers.Default) {
                 computeFilterResult(
                     entries = indexedChannels,
+                    channelsByGroupId = channelsByGroupId,
                     selectedGroupId = selectedGroupIdSnapshot,
                     searchQuery = querySnapshot,
                     favoriteIds = favoriteIdsSnapshot,
                     favoriteGroupIds = favoriteGroupIdsSnapshot,
                     selectedIndex = selectedIndexSnapshot,
-                    groups = cachedGroups
+                    groups = cachedGroups,
+                    preservePlaybackSelection = true
                 )
             }
 
@@ -918,13 +957,7 @@ internal class MainViewModel(
                 latestState.channels !== channelsSnapshot
             ) return@launch
 
-            filteredIndexByOriginalIndex = filterResult.indexByOriginalIndex
-            _uiState.value = latestState.copy(
-                filteredChannels = filterResult.filteredChannels,
-                groups = filterResult.groups,
-                selectedIndex = filterResult.selectedIndex,
-                selectedVisibleIndex = filterResult.selectedVisibleIndex
-            )
+            applyFilterResult(filterResult, latestState)
         }
     }
 
@@ -1098,6 +1131,7 @@ internal class MainViewModel(
         val clearedState = UiState()
         _uiState.value = clearedState
         indexedChannels = emptyList()
+        channelsByGroupId = emptyMap()
         cachedGroups = emptyList()
         filteredIndexByOriginalIndex = emptyMap()
         epgTimelinesByKey = emptyMap()
@@ -1177,6 +1211,7 @@ internal class MainViewModel(
 
     private data class PreparedChannels(
         val indexedChannels: List<ChannelListEntry>,
+        val channelsByGroupId: Map<String, List<ChannelListEntry>>,
         val groups: List<ChannelGroup>,
         val resolvedGroupId: String,
         val filterResult: FilterResult
@@ -1195,39 +1230,45 @@ internal class MainViewModel(
                 channel = channel
             )
         }
+        val byGroupId = buildChannelsByGroupId(indexedEntries)
         val groups = buildChannelGroups(indexedEntries, favoriteIds, favoriteGroupIds)
         val resolvedGroupId = resolveGroupId(preferredGroupId, groups)
         return PreparedChannels(
             indexedChannels = indexedEntries,
+            channelsByGroupId = byGroupId,
             groups = groups,
             resolvedGroupId = resolvedGroupId,
             filterResult = computeFilterResult(
                 entries = indexedEntries,
+                channelsByGroupId = byGroupId,
                 selectedGroupId = resolvedGroupId,
                 searchQuery = searchQuery.trim(),
                 favoriteIds = favoriteIds,
                 favoriteGroupIds = favoriteGroupIds,
                 selectedIndex = -1,
-                groups = groups
+                groups = groups,
+                preservePlaybackSelection = false
             )
         )
     }
 
     private fun computeFilterResult(
         entries: List<ChannelListEntry>,
+        channelsByGroupId: Map<String, List<ChannelListEntry>>,
         selectedGroupId: String,
         searchQuery: String,
         favoriteIds: Set<String>,
         favoriteGroupIds: Set<String>,
         selectedIndex: Int,
-        groups: List<ChannelGroup>
+        groups: List<ChannelGroup>,
+        preservePlaybackSelection: Boolean
     ): FilterResult {
         val groupFiltered = when (selectedGroupId) {
             AllChannelsGroupId -> entries
             FavoriteChannelsGroupId -> entries.filter {
                 isChannelEntryFavorite(it, favoriteIds, favoriteGroupIds)
             }
-            else -> entries.filter { it.groupId == selectedGroupId }
+            else -> channelsByGroupId[selectedGroupId].orEmpty()
         }
 
         val filteredChannels = if (searchQuery.isBlank()) {
@@ -1239,23 +1280,37 @@ internal class MainViewModel(
             }
         }
 
-        val indexMap = HashMap<Int, Int>(filteredChannels.size)
+        val indexMap = HashMap<Int, Int>(filteredChannels.size.coerceAtLeast(16))
         filteredChannels.forEachIndexed { visibleIndex, entry ->
             indexMap[entry.originalIndex] = visibleIndex
         }
 
         val resolvedSelectedIndex = when {
-            selectedIndex < 0 -> -1
+            selectedIndex < 0 -> if (!preservePlaybackSelection && filteredChannels.isNotEmpty()) {
+                filteredChannels.first().originalIndex
+            } else {
+                selectedIndex
+            }
             indexMap.containsKey(selectedIndex) -> selectedIndex
+            // Keep current playback when browsing another group; only auto-pick on initial load.
+            preservePlaybackSelection -> selectedIndex
             filteredChannels.isNotEmpty() -> filteredChannels.first().originalIndex
             else -> -1
         }
+
+        val selectedVisibleIndex = indexMap[resolvedSelectedIndex]
+            ?: if (filteredChannels.isNotEmpty() && !indexMap.containsKey(selectedIndex)) {
+                // Focus the top of the new group list without changing playback.
+                0
+            } else {
+                -1
+            }
 
         return FilterResult(
             filteredChannels = filteredChannels,
             indexByOriginalIndex = indexMap,
             selectedIndex = resolvedSelectedIndex,
-            selectedVisibleIndex = indexMap[resolvedSelectedIndex] ?: -1,
+            selectedVisibleIndex = selectedVisibleIndex,
             groups = groups
         )
     }
