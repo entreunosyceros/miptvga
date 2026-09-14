@@ -172,5 +172,5 @@ Los APK van en **Releases**, no en el árbol del código (están ignorados con `
 ## Notas
 
 - La app declara launcher normal y **LEANBACK_LAUNCHER** para Android TV.
-- Sin firma release configurada, `assembleRelease` puede generar un APK no firmado o firmado según tu entorno; para distribución usa firma propia o el APK de la Release publicada.
+- Sin firma release configurada, `assembleRelease` puede generar un APK no firmado o firmado según tu entorno.
 - Uso destinado a listas IPTV legales a las que tengas acceso legítimo.
