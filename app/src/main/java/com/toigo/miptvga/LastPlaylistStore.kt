@@ -115,8 +115,12 @@ internal class LastPlaylistStore(context: Context) {
     fun readXtreamKeepAliveSettings(): XtreamKeepAliveSettings {
         return XtreamKeepAliveSettings(
             enabled = preferences.getBoolean(KeyXtreamKeepAliveEnabled, true),
-            intervalSeconds = preferences.getInt(KeyXtreamKeepAliveIntervalSeconds, 45)
+            intervalSeconds = preferences.getInt(KeyXtreamKeepAliveIntervalSeconds, 30)
         ).sanitized()
+    }
+
+    fun clearAll() {
+        preferences.edit { clear() }
     }
 }
 

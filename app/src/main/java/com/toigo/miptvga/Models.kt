@@ -38,7 +38,7 @@ internal data class EpgSettings(
 @Immutable
 internal data class XtreamKeepAliveSettings(
     val enabled: Boolean = true,
-    val intervalSeconds: Int = 45
+    val intervalSeconds: Int = 30
 )
 
 @Immutable
@@ -117,6 +117,37 @@ internal data class PlaybackControllerActions(
 )
 
 @Immutable
+internal data class PlaylistState(
+    val channels: List<Channel> = emptyList(),
+    val filteredChannels: List<ChannelListEntry> = emptyList(),
+    val groups: List<ChannelGroup> = emptyList(),
+    val searchQuery: String = "",
+    val selectedGroupId: String = AllChannelsGroupId
+)
+
+@Immutable
+internal data class PlaybackUiState(
+    val selectedIndex: Int = -1,
+    val selectedVisibleIndex: Int = -1,
+    val playbackBackend: PlaybackBackend = PlaybackBackend.VLC,
+    val videoCompatibilityMode: VideoCompatibilityMode = VideoCompatibilityMode.SURFACE_VIEW,
+    val playbackMessage: String? = null,
+    val playbackMessageIsError: Boolean = false,
+    val isFullscreen: Boolean = false,
+    val controlsVisible: Boolean = true,
+    val controlsVisibilityToken: Int = 0
+)
+
+@Immutable
+internal data class EpgUiState(
+    val epgSettings: EpgSettings = EpgSettings(),
+    val currentPrograms: Map<String, CurrentProgram> = emptyMap(),
+    val nextPrograms: Map<String, CurrentProgram> = emptyMap(),
+    val epgStatus: String = "EPG desactivada",
+    val isEpgLoading: Boolean = false
+)
+
+@Immutable
 internal data class UiState(
     val channels: List<Channel> = emptyList(),
     val filteredChannels: List<ChannelListEntry> = emptyList(),
@@ -149,7 +180,19 @@ internal data class UiState(
     val fileBrowserStatus: String = "Selecciona una carpeta o una lista M3U",
     val isFileBrowserLoading: Boolean = false,
     val currentScreen: AppScreen = AppScreen.MAIN
-)
+) {
+    val playlistState: PlaylistState
+        get() = PlaylistState(channels, filteredChannels, groups, searchQuery, selectedGroupId)
+
+    val playbackUiState: PlaybackUiState
+        get() = PlaybackUiState(
+            selectedIndex, selectedVisibleIndex, playbackBackend, videoCompatibilityMode,
+            playbackMessage, playbackMessageIsError, isFullscreen, controlsVisible, controlsVisibilityToken
+        )
+
+    val epgUiState: EpgUiState
+        get() = EpgUiState(epgSettings, currentPrograms, nextPrograms, epgStatus, isEpgLoading)
+}
 
 @Immutable
 internal data class ChannelListEntry(
@@ -314,6 +357,31 @@ internal fun XtreamKeepAliveSettings.statusLabel(): String {
         "Keepalive Xtream activo · ${safeSettings.intervalSeconds}s"
     } else {
         "Keepalive Xtream desactivado"
+    }
+}
+
+@Immutable
+internal data class StorageInfo(
+    val playbackCacheBytes: Long = 0L,
+    val imageCacheBytes: Long = 0L,
+    val appCacheBytes: Long = 0L,
+    val totalBytes: Long = 0L
+) {
+    companion object {
+        val Empty = StorageInfo()
+    }
+}
+
+internal fun Long.formatStorageSize(): String {
+    if (this <= 0L) return "0 B"
+    val kb = this / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1.0 -> "%.1f GB".format(gb)
+        mb >= 1.0 -> "%.1f MB".format(mb)
+        kb >= 1.0 -> "%.1f KB".format(kb)
+        else -> "$this B"
     }
 }
 

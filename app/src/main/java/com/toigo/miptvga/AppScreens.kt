@@ -43,9 +43,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
@@ -88,6 +91,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.compose.foundation.layout.heightIn
 import kotlinx.coroutines.delay
 import java.util.Date
 
@@ -98,7 +102,6 @@ private const val AppLogoDescription = "Logo de miptvga"
 private const val AppByline = "app creada por entreunosycero.net"
 private const val SidePanelCompactWidthDp = 320
 private const val SidePanelExpandedWidthDp = 368
-private val TvSafeAreaPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
 
 private val AppBackgroundColor = Color(0xFF080B10)
 private val PanelColor = Color(0xFF11161D)
@@ -116,9 +119,12 @@ private val StatusChipColor = Color(0xFF18212C)
 private val StatusChipAccentColor = Color(0xFF214F79)
 private val SearchStripColor = Color(0xFF10161E)
 private val GroupSectionColor = Color(0xFF0D131B)
-private val PanelShape = RoundedCornerShape(2.dp)
-private val ItemShape = RoundedCornerShape(2.dp)
-private val ChipShape = RoundedCornerShape(2.dp)
+private val FocusHighlightColor = Color(0xFF4DA6FF)
+private val FocusedPrimaryColor = Color(0xFF3A9BE8)
+private val FocusedSecondaryColor = Color(0xFF2A4460)
+private val PanelShape = RoundedCornerShape(4.dp)
+private val ItemShape = RoundedCornerShape(4.dp)
+private val ChipShape = RoundedCornerShape(4.dp)
 
 private fun PlaylistSource?.sourceTypeLabel(): String {
     return when (this?.type) {
@@ -202,19 +208,37 @@ private fun AppActionButton(
     enabled: Boolean = true,
     primary: Boolean = false
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val highlighted = isFocused || isHovered
+
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.height(42.dp),
+        interactionSource = interactionSource,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .then(
+                if (highlighted && enabled) Modifier.border(
+                    2.dp,
+                    FocusHighlightColor,
+                    ItemShape
+                ) else Modifier
+            ),
         shape = ItemShape,
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (primary) PrimaryButtonColor else ButtonSecondaryColor,
+            containerColor = when {
+                highlighted && enabled -> if (primary) FocusedPrimaryColor else FocusedSecondaryColor
+                primary -> PrimaryButtonColor
+                else -> ButtonSecondaryColor
+            },
             contentColor = Color.White,
             disabledContainerColor = PanelColorElevated,
             disabledContentColor = SecondaryTextColor
         )
     ) {
-        Text(text, maxLines = 1)
+        Text(text, maxLines = 1, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -228,6 +252,8 @@ private fun MiniOsdButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val highlighted = isFocused || isHovered
 
     LaunchedEffect(isFocused, onFocus) {
         if (isFocused) {
@@ -241,23 +267,32 @@ private fun MiniOsdButton(
             .background(
                 when {
                     active -> PrimaryButtonColor
-                    isFocused -> PanelColorElevated
+                    highlighted -> FocusedSecondaryColor
                     else -> StatusChipColor
                 }
             )
-            .border(1.dp, if (active || isFocused) PrimaryButtonColor else PanelBorderColor, ItemShape)
+            .border(
+                width = if (highlighted) 2.dp else 1.dp,
+                color = when {
+                    highlighted -> FocusHighlightColor
+                    active -> PrimaryButtonColor
+                    else -> PanelBorderColor
+                },
+                shape = ItemShape
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick
             )
+            .hoverable(interactionSource = interactionSource)
             .focusable(interactionSource = interactionSource)
-            .padding(horizontal = 10.dp, vertical = 5.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Text(
             text = text,
             color = Color.White,
-            style = MaterialTheme.typography.labelMedium
+            style = MaterialTheme.typography.labelLarge
         )
     }
 }
@@ -481,6 +516,7 @@ internal fun RootScreen(vm: MainViewModel) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val fullscreenActive = ui.currentScreen == AppScreen.MAIN && ui.isFullscreen
+    val windowMetrics = rememberAppWindowMetrics()
 
     BackHandler(enabled = ui.currentScreen != AppScreen.MAIN) {
         if (ui.currentScreen == AppScreen.FILE_BROWSER) {
@@ -517,7 +553,7 @@ internal fun RootScreen(vm: MainViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(if (fullscreenActive) PaddingValues(0.dp) else TvSafeAreaPadding)
+            .padding(if (fullscreenActive) PaddingValues(0.dp) else windowMetrics.safePadding)
     ) {
         when (ui.currentScreen) {
             AppScreen.ABOUT -> AboutScreen(onBack = vm::openMain)
@@ -583,25 +619,36 @@ private fun WelcomePlaceholder() {
 @Composable
 private fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val windowMetrics = rememberAppWindowMetrics()
+    val logoSize = when {
+        windowMetrics.isCompact -> 120.dp
+        windowMetrics.isMedium -> 150.dp
+        else -> 180.dp
+    }
+    val panelPadding = if (windowMetrics.isCompact) {
+        PaddingValues(horizontal = 16.dp, vertical = 16.dp)
+    } else {
+        PaddingValues(horizontal = 26.dp, vertical = 24.dp)
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(24.dp),
+            .padding(windowMetrics.screenPadding),
         contentAlignment = Alignment.Center
     ) {
         AppPanel(
-            modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 26.dp, vertical = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier.widthIn(max = windowMetrics.maxContentWidth).fillMaxWidth(),
+            contentPadding = panelPadding,
+            verticalArrangement = Arrangement.spacedBy(if (windowMetrics.isCompact) 12.dp else 16.dp)
         ) {
             StatusChip(text = "Acerca de", accent = true)
             Image(
                 painter = painterResource(id = R.drawable.miptvga),
                 contentDescription = AppLogoDescription,
                 modifier = Modifier
-                    .size(180.dp)
+                    .size(logoSize)
                     .align(Alignment.CenterHorizontally)
             )
             Text(
@@ -649,15 +696,16 @@ private fun SearchScreen(
     ui: UiState,
     vm: MainViewModel
 ) {
+    val windowMetrics = rememberAppWindowMetrics()
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(20.dp)
+            .padding(windowMetrics.screenPadding)
     ) {
         AppPanel(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(18.dp),
+            contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -682,31 +730,55 @@ private fun SearchScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                AppActionButton(
-                    text = "Volver",
-                    onClick = vm::openMain,
-                    modifier = Modifier.weight(1f)
-                )
-                AppActionButton(
-                    text = "Limpiar",
-                    onClick = { vm.updateSearchQuery("") },
-                    modifier = Modifier.weight(1f),
-                    enabled = ui.searchQuery.isNotBlank()
-                )
-                AppActionButton(
-                    text = "Guía",
-                    onClick = vm::openGuide,
-                    modifier = Modifier.weight(1f)
-                )
-                AppActionButton(
-                    text = "Ajustes",
-                    onClick = vm::openSettings,
-                    modifier = Modifier.weight(1f)
-                )
+            if (windowMetrics.isCompact) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AppActionButton(text = "Volver", onClick = vm::openMain, modifier = Modifier.weight(1f))
+                        AppActionButton(
+                            text = "Limpiar",
+                            onClick = { vm.updateSearchQuery("") },
+                            modifier = Modifier.weight(1f),
+                            enabled = ui.searchQuery.isNotBlank()
+                        )
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AppActionButton(text = "Guía", onClick = vm::openGuide, modifier = Modifier.weight(1f))
+                        AppActionButton(text = "Ajustes", onClick = vm::openSettings, modifier = Modifier.weight(1f))
+                    }
+                }
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    AppActionButton(
+                        text = "Volver",
+                        onClick = vm::openMain,
+                        modifier = Modifier.weight(1f)
+                    )
+                    AppActionButton(
+                        text = "Limpiar",
+                        onClick = { vm.updateSearchQuery("") },
+                        modifier = Modifier.weight(1f),
+                        enabled = ui.searchQuery.isNotBlank()
+                    )
+                    AppActionButton(
+                        text = "Guía",
+                        onClick = vm::openGuide,
+                        modifier = Modifier.weight(1f)
+                    )
+                    AppActionButton(
+                        text = "Ajustes",
+                        onClick = vm::openSettings,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             ChannelList(
@@ -733,6 +805,7 @@ private fun GuideScreen(
     ui: UiState,
     vm: MainViewModel
 ) {
+    val windowMetrics = rememberAppWindowMetrics()
     val timeFormatter = rememberDeviceTimeFormatter()
     val listState = rememberLazyListState()
     val focusTargetIndex = remember(ui.selectedVisibleIndex, ui.filteredChannels.size) {
@@ -753,13 +826,15 @@ private fun GuideScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(20.dp)
+            .padding(windowMetrics.screenPadding)
     ) {
-        val useVerticalLayout = maxWidth < 980.dp
+        val useVerticalLayout = !windowMetrics.useWideGuideLayout(maxWidth)
+        val groupsStripHeight = windowMetrics.guideStackedGroupsHeight(maxHeight)
+        val groupsColumnWidth = windowMetrics.guideGroupsWidth(maxWidth)
 
         AppPanel(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(18.dp),
+            contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (useVerticalLayout) {
@@ -773,7 +848,7 @@ private fun GuideScreen(
                 GroupList(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(204.dp),
+                        .height(groupsStripHeight),
                     groups = ui.groups,
                     selectedGroupId = ui.selectedGroupId,
                     isLoading = ui.isLoading,
@@ -801,7 +876,7 @@ private fun GuideScreen(
                 ) {
                     AppPanel(
                         modifier = Modifier
-                            .width(294.dp)
+                            .width(groupsColumnWidth)
                             .fillMaxHeight(),
                         contentPadding = PaddingValues(12.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1156,6 +1231,7 @@ private fun ChannelInfoScreen(
     ui: UiState,
     vm: MainViewModel
 ) {
+    val windowMetrics = rememberAppWindowMetrics()
     val channel = ui.channels.getOrNull(ui.selectedIndex)
     val currentProgram = channel?.let { currentProgramForChannel(it, ui.currentPrograms) }
     val nextProgram = channel?.let { nextProgramForChannel(it, ui.nextPrograms) }
@@ -1170,12 +1246,12 @@ private fun ChannelInfoScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(20.dp)
+            .padding(windowMetrics.screenPadding)
     ) {
         AppPanel(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 22.dp),
+            verticalArrangement = Arrangement.spacedBy(if (windowMetrics.isCompact) 12.dp else 16.dp)
         ) {
             if (channel == null) {
                 SectionTitle(
@@ -1194,8 +1270,8 @@ private fun ChannelInfoScreen(
                         logoUrl = channel.logoUrl,
                         channelName = channel.name,
                         modifier = Modifier
-                            .width(120.dp)
-                            .height(72.dp)
+                            .width(if (windowMetrics.isCompact) 88.dp else 120.dp)
+                            .height(if (windowMetrics.isCompact) 52.dp else 72.dp)
                     )
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
@@ -1209,7 +1285,10 @@ private fun ChannelInfoScreen(
                             color = SecondaryTextColor,
                             style = MaterialTheme.typography.bodyLarge
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             StatusChip(text = if (channelIsFavorite) "Favorito" else "Normal")
                             if (channelIsIndividuallyFavorite) {
                                 StatusChip(text = "Canal favorito")
@@ -1222,36 +1301,69 @@ private fun ChannelInfoScreen(
                     }
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    AppActionButton(
-                        text = "Volver",
-                        onClick = vm::openMain,
-                        modifier = Modifier.weight(1f)
-                    )
-                    AppActionButton(
-                        text = "Guía",
-                        onClick = vm::openGuide,
-                        modifier = Modifier.weight(1f)
-                    )
-                    AppActionButton(
-                        text = if (channelIsIndividuallyFavorite) "Canal ★" else "Canal ☆",
-                        onClick = { vm.toggleFavorite(ui.selectedIndex) },
-                        modifier = Modifier.weight(1f)
-                    )
-                    AppActionButton(
-                        text = if (channelGroupIsFavorite) "Grupo ★" else "Grupo ☆",
-                        onClick = vm::toggleFavoriteGroupForSelectedChannel,
-                        modifier = Modifier.weight(1f)
-                    )
-                    AppActionButton(
-                        text = "Reproducir",
-                        onClick = vm::openMain,
-                        modifier = Modifier.weight(1f),
-                        primary = true
-                    )
+                if (windowMetrics.isCompact || windowMetrics.isMedium) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AppActionButton(text = "Volver", onClick = vm::openMain, modifier = Modifier.weight(1f))
+                            AppActionButton(text = "Guía", onClick = vm::openGuide, modifier = Modifier.weight(1f))
+                            AppActionButton(
+                                text = "Reproducir",
+                                onClick = vm::openMain,
+                                modifier = Modifier.weight(1f),
+                                primary = true
+                            )
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AppActionButton(
+                                text = if (channelIsIndividuallyFavorite) "Canal ★" else "Canal ☆",
+                                onClick = { vm.toggleFavorite(ui.selectedIndex) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            AppActionButton(
+                                text = if (channelGroupIsFavorite) "Grupo ★" else "Grupo ☆",
+                                onClick = vm::toggleFavoriteGroupForSelectedChannel,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AppActionButton(
+                            text = "Volver",
+                            onClick = vm::openMain,
+                            modifier = Modifier.weight(1f)
+                        )
+                        AppActionButton(
+                            text = "Guía",
+                            onClick = vm::openGuide,
+                            modifier = Modifier.weight(1f)
+                        )
+                        AppActionButton(
+                            text = if (channelIsIndividuallyFavorite) "Canal ★" else "Canal ☆",
+                            onClick = { vm.toggleFavorite(ui.selectedIndex) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        AppActionButton(
+                            text = if (channelGroupIsFavorite) "Grupo ★" else "Grupo ☆",
+                            onClick = vm::toggleFavoriteGroupForSelectedChannel,
+                            modifier = Modifier.weight(1f)
+                        )
+                        AppActionButton(
+                            text = "Reproducir",
+                            onClick = vm::openMain,
+                            modifier = Modifier.weight(1f),
+                            primary = true
+                        )
+                    }
                 }
 
                 AppPanel(
@@ -1326,11 +1438,13 @@ private fun SettingsScreen(
         mutableIntStateOf(ui.xtreamKeepAliveSettings.intervalSeconds)
     }
 
+    val windowMetrics = rememberAppWindowMetrics()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(20.dp)
+            .padding(windowMetrics.screenPadding)
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -1339,7 +1453,7 @@ private fun SettingsScreen(
             item {
                 AppPanel(
                     modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(18.dp),
+                    contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(
@@ -1353,15 +1467,35 @@ private fun SettingsScreen(
                         )
                         StatusChip(text = ui.status, accent = !ui.isLoading)
                     }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        AppActionButton(text = "Volver", onClick = vm::openMain, modifier = Modifier.weight(1f))
-                        AppActionButton(text = "Buscar", onClick = vm::openSearch, modifier = Modifier.weight(1f))
-                        AppActionButton(text = "Guía", onClick = vm::openGuide, modifier = Modifier.weight(1f))
-                        AppActionButton(text = "About", onClick = onOpenAbout, modifier = Modifier.weight(1f))
-                        AppActionButton(text = "Salir", onClick = onExitApp, modifier = Modifier.weight(1f))
+                    if (windowMetrics.isCompact || windowMetrics.isMedium) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                AppActionButton(text = "Volver", onClick = vm::openMain, modifier = Modifier.weight(1f))
+                                AppActionButton(text = "Buscar", onClick = vm::openSearch, modifier = Modifier.weight(1f))
+                                AppActionButton(text = "Guía", onClick = vm::openGuide, modifier = Modifier.weight(1f))
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                AppActionButton(text = "About", onClick = onOpenAbout, modifier = Modifier.weight(1f))
+                                AppActionButton(text = "Salir", onClick = onExitApp, modifier = Modifier.weight(1f))
+                            }
+                        }
+                    } else {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AppActionButton(text = "Volver", onClick = vm::openMain, modifier = Modifier.weight(1f))
+                            AppActionButton(text = "Buscar", onClick = vm::openSearch, modifier = Modifier.weight(1f))
+                            AppActionButton(text = "Guía", onClick = vm::openGuide, modifier = Modifier.weight(1f))
+                            AppActionButton(text = "About", onClick = onOpenAbout, modifier = Modifier.weight(1f))
+                            AppActionButton(text = "Salir", onClick = onExitApp, modifier = Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -1561,6 +1695,192 @@ private fun SettingsScreen(
                     }
                 }
             }
+
+            item {
+                MaintenanceSection(vm = vm)
+            }
+        }
+    }
+}
+
+@androidx.media3.common.util.UnstableApi
+@Composable
+private fun MaintenanceSection(vm: MainViewModel) {
+    val storageInfo by vm.storageInfo.collectAsStateWithLifecycle()
+    var showResetPreferencesDialog by rememberSaveable { mutableStateOf(false) }
+    var showResetAppDialog by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { vm.refreshStorageInfo() }
+
+    if (showResetPreferencesDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetPreferencesDialog = false },
+            title = { Text("Restablecer preferencias", color = Color.White) },
+            text = {
+                Text(
+                    "Se borrarán todos los favoritos, ajustes EPG, keepalive y la lista guardada. Los archivos de caché no se borrarán.",
+                    color = SecondaryTextColor
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.resetPreferences()
+                    showResetPreferencesDialog = false
+                }) { Text("Restablecer", color = Color(0xFFE57373)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetPreferencesDialog = false }) {
+                    Text("Cancelar", color = SecondaryTextColor)
+                }
+            },
+            containerColor = PanelColor,
+            tonalElevation = 0.dp
+        )
+    }
+
+    if (showResetAppDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetAppDialog = false },
+            title = { Text("Restablecer aplicación completa", color = Color.White) },
+            text = {
+                Text(
+                    "Se borrarán TODOS los datos: caché de reproducción, imágenes, preferencias, favoritos y la lista guardada. La aplicación volverá a su estado inicial.",
+                    color = Color(0xFFE57373)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.resetApp()
+                    showResetAppDialog = false
+                }) { Text("Borrar todo", color = Color(0xFFE57373)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetAppDialog = false }) {
+                    Text("Cancelar", color = SecondaryTextColor)
+                }
+            },
+            containerColor = PanelColor,
+            tonalElevation = 0.dp
+        )
+    }
+
+    AppPanel(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        SectionTitle(
+            title = "Mantenimiento",
+            subtitle = "Almacenamiento total: ${storageInfo.totalBytes.formatStorageSize()}"
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StorageInfoCard(
+                label = "Caché reproducción",
+                size = storageInfo.playbackCacheBytes.formatStorageSize(),
+                modifier = Modifier.weight(1f)
+            )
+            StorageInfoCard(
+                label = "Caché imágenes",
+                size = storageInfo.imageCacheBytes.formatStorageSize(),
+                modifier = Modifier.weight(1f)
+            )
+            StorageInfoCard(
+                label = "Otros datos",
+                size = storageInfo.appCacheBytes.formatStorageSize(),
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Text(
+            text = "Limpieza de caché",
+            color = Color.White,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            AppActionButton(
+                text = "Limpiar caché reproducción",
+                onClick = vm::clearPlaybackCache,
+                modifier = Modifier.weight(1f)
+            )
+            AppActionButton(
+                text = "Limpiar caché imágenes",
+                onClick = vm::clearImageCache,
+                modifier = Modifier.weight(1f)
+            )
+            AppActionButton(
+                text = "Limpiar todo el caché",
+                onClick = vm::clearAllCache,
+                modifier = Modifier.weight(1f),
+                primary = true
+            )
+        }
+
+        Text(
+            text = "Restablecer datos",
+            color = Color.White,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            AppActionButton(
+                text = "Restablecer preferencias",
+                onClick = { showResetPreferencesDialog = true },
+                modifier = Modifier.weight(1f)
+            )
+            AppActionButton(
+                text = "Restablecer aplicación",
+                onClick = { showResetAppDialog = true },
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Text(
+            text = "El restablecimiento de preferencias borra favoritos, EPG y lista guardada. " +
+                "El restablecimiento completo borra además todo el caché.",
+            color = SecondaryTextColor,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+private fun StorageInfoCard(
+    label: String,
+    size: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(ItemShape)
+            .background(PanelColorElevated)
+            .border(1.dp, PanelBorderColor, ItemShape)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = label,
+                color = SecondaryTextColor,
+                style = MaterialTheme.typography.labelMedium
+            )
+            Text(
+                text = size,
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }
@@ -1654,39 +1974,59 @@ private fun LandingScreen(
     onOpenAbout: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
-    Box(
+    val scrollState = rememberScrollState()
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppBackgroundColor),
+            .background(AppBackgroundColor)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
+        val compact = maxHeight < 640.dp
+        val logoSize = when {
+            maxHeight < 520.dp -> 72.dp
+            compact -> 112.dp
+            else -> 148.dp
+        }
+        val panelSpacing = if (compact) 8.dp else 12.dp
+        val panelPadding = if (compact) {
+            PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+        } else {
+            PaddingValues(horizontal = 24.dp, vertical = 18.dp)
+        }
+
         AppPanel(
             modifier = Modifier
-                .fillMaxWidth(0.82f)
-                .widthIn(max = 760.dp),
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 820.dp)
+                .heightIn(max = maxHeight)
+                .verticalScroll(scrollState),
+            contentPadding = panelPadding,
+            verticalArrangement = Arrangement.spacedBy(panelSpacing)
         ) {
             StatusChip(text = "Android TV · Caja Android", accent = true)
             Image(
                 painter = painterResource(id = R.drawable.miptvga),
                 contentDescription = AppLogoDescription,
                 modifier = Modifier
-                    .size(176.dp)
+                    .size(logoSize)
                     .align(Alignment.CenterHorizontally)
             )
             Text(
                 text = AppFullName,
                 color = Color.White,
-                style = MaterialTheme.typography.headlineMedium,
+                style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             )
-            Text(
-                text = "Interfaz simple, rápida y pensada para reproducir tus listas M3U con el mínimo consumo posible.",
-                color = MutedTextColor,
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyLarge
-            )
+            if (!compact) {
+                Text(
+                    text = "Interfaz simple, rápida y pensada para reproducir tus listas M3U con el mínimo consumo posible.",
+                    color = MutedTextColor,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
             Text(
                 text = AppByline,
                 color = MutedTextColor,
@@ -1745,7 +2085,7 @@ private fun LandingScreen(
             }
             AppPanel(
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = if (compact) 10.dp else 14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 SectionTitle(
@@ -1788,7 +2128,8 @@ private fun MainScreen(
         ui.groups.firstOrNull { it.id == groupId }
     }
     val selectedChannelGroupIsFavorite = selectedChannelGroup?.isFavorite == true
-    val sidePanelWidth = if (ui.channels.size > 10_000) SidePanelExpandedWidthDp.dp else SidePanelCompactWidthDp.dp
+    val windowMetrics = rememberAppWindowMetrics()
+    val largePlaylist = ui.channels.size > 10_000
 
     LaunchedEffect(ui.playlistSource?.value, ui.playlistSource?.type) {
         if (ui.playlistSource?.type == PlaylistSourceType.URL && ui.playlistSource.value != url) {
@@ -1819,13 +2160,16 @@ private fun MainScreen(
             .fillMaxSize()
             .background(AppBackgroundColor)
     ) {
-        val useVerticalLayout = maxWidth < 720.dp
+        val useVerticalLayout = windowMetrics.useStackedMainLayout(maxWidth)
+        val sidePanelWidth = windowMetrics.sidePanelWidth(maxWidth, largePlaylist)
+        val stackedPanelHeight = windowMetrics.stackedPanelHeight(maxHeight)
+
         PlayerPanel(
             modifier = when {
                 ui.isFullscreen -> Modifier.fillMaxSize()
                 useVerticalLayout -> Modifier
                     .fillMaxSize()
-                    .padding(top = 360.dp)
+                    .padding(top = stackedPanelHeight)
                 else -> Modifier
                     .fillMaxSize()
                     .padding(start = sidePanelWidth)
@@ -1870,44 +2214,29 @@ private fun MainScreen(
                     Modifier
                         .align(Alignment.TopStart)
                         .fillMaxWidth()
-                        .height(360.dp)
+                        .height(stackedPanelHeight)
                 } else {
                     Modifier
                         .align(Alignment.CenterStart)
                         .fillMaxHeight()
                 },
                 widthOverride = if (useVerticalLayout) null else sidePanelWidth,
-                url = url,
-                onUrlChange = { url = it },
-                playlistSource = ui.playlistSource,
                 epgSettings = ui.epgSettings,
                 currentPrograms = ui.currentPrograms,
-                epgStatus = ui.epgStatus,
-                isEpgLoading = ui.isEpgLoading,
-                searchQuery = ui.searchQuery,
-                groups = ui.groups,
-                selectedGroupId = ui.selectedGroupId,
-                status = ui.status,
                 isLoading = ui.isLoading,
-                totalChannelCount = ui.channels.size,
                 selectedIndex = ui.selectedIndex,
                 selectedVisibleIndex = ui.selectedVisibleIndex,
+                groups = ui.groups,
+                selectedGroupId = ui.selectedGroupId,
                 filteredChannels = ui.filteredChannels,
                 favoriteIds = ui.favoriteIds,
                 favoriteGroupIds = ui.favoriteGroupIds,
                 showChannelLogos = ui.showChannelLogos,
-                onLoadUrl = { vm.loadFromUrl(url) },
-                onLoadFile = vm::openFileBrowser,
-                onReloadLastPlaylist = vm::reloadLastPlaylist,
                 onOpenAbout = onOpenAbout,
                 onOpenSearch = vm::openSearch,
                 onOpenGuide = vm::openGuide,
-                onOpenChannelInfo = vm::openChannelInfo,
                 onOpenSettings = vm::openSettings,
-                onQueryInputChange = vm::updateSearchQuery,
                 onSelectGroup = vm::selectGroup,
-                onToggleFavoriteGroup = vm::toggleFavoriteGroup,
-                onToggleChannelLogos = vm::toggleChannelLogos,
                 onToggleFavorite = vm::toggleFavorite,
                 onSelectChannel = vm::selectChannel
             )
@@ -1919,37 +2248,22 @@ private fun MainScreen(
 private fun SidePanel(
     modifier: Modifier,
     widthOverride: androidx.compose.ui.unit.Dp?,
-    url: String,
-    onUrlChange: (String) -> Unit,
-    playlistSource: PlaylistSource?,
     epgSettings: EpgSettings,
     currentPrograms: Map<String, CurrentProgram>,
-    epgStatus: String,
-    isEpgLoading: Boolean,
-    searchQuery: String,
-    groups: List<ChannelGroup>,
-    selectedGroupId: String,
-    status: String,
     isLoading: Boolean,
-    totalChannelCount: Int,
     selectedIndex: Int,
     selectedVisibleIndex: Int,
-    onQueryInputChange: (String) -> Unit,
+    groups: List<ChannelGroup>,
+    selectedGroupId: String,
     filteredChannels: List<ChannelListEntry>,
     favoriteIds: Set<String>,
     favoriteGroupIds: Set<String>,
     showChannelLogos: Boolean,
-    onLoadUrl: () -> Unit,
-    onLoadFile: () -> Unit,
-    onReloadLastPlaylist: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenGuide: () -> Unit,
-    onOpenChannelInfo: () -> Unit,
     onOpenSettings: () -> Unit,
     onSelectGroup: (String) -> Unit,
-    onToggleFavoriteGroup: (String) -> Unit,
-    onToggleChannelLogos: () -> Unit,
     onToggleFavorite: (Int) -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
@@ -1960,31 +2274,11 @@ private fun SidePanel(
     }
     val selectedEntry = filteredChannels.firstOrNull { it.originalIndex == selectedIndex }
     val selectedGroupTitle = groups.firstOrNull { it.id == selectedGroupId }?.title ?: "Todos los canales"
-    val selectedGroup = groups.firstOrNull { it.id == selectedGroupId }
-    val canToggleSelectedGroupFavorite = selectedGroup?.let { isUserSelectableChannelGroup(it.id) } == true
-    val selectedGroupDisplayTitle = if (selectedGroup?.isFavorite == true) "★ $selectedGroupTitle" else selectedGroupTitle
-    val loadGroupFocusRequester = remember { FocusRequester() }
-    var showSourceControls by rememberSaveable { mutableStateOf(false) }
-    var showSelectedGroupChannels by rememberSaveable { mutableStateOf(false) }
-    var focusLoadGroupButton by rememberSaveable { mutableStateOf(false) }
     var channelListFocusToken by rememberSaveable { mutableIntStateOf(0) }
-    var groupListFocusToken by rememberSaveable { mutableIntStateOf(0) }
-
-    LaunchedEffect(focusLoadGroupButton, selectedGroupId) {
-        if (focusLoadGroupButton && !showSelectedGroupChannels) {
-            loadGroupFocusRequester.requestFocus()
-            focusLoadGroupButton = false
-        }
-    }
-
-    BackHandler(enabled = showSelectedGroupChannels) {
-        showSelectedGroupChannels = false
-        groupListFocusToken += 1
-    }
 
     Column(
         modifier = panelModifier
-            .padding(horizontal = 6.dp, vertical = 8.dp),
+            .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         AppPanel(
@@ -1994,338 +2288,81 @@ private fun SidePanel(
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(ItemShape)
-                    .background(StatusChipAccentColor.copy(alpha = 0.42f))
-                    .border(1.dp, PrimaryButtonColor.copy(alpha = 0.7f), ItemShape)
-                    .padding(horizontal = 10.dp, vertical = 10.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.miptvga),
-                            contentDescription = AppLogoDescription,
-                            modifier = Modifier.size(30.dp)
-                        )
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            Text(
-                                text = "TV CHANNELS",
-                                color = MutedTextColor,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = groups.firstOrNull { it.id == selectedGroupId }?.title ?: AppDisplayName,
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                            )
-                            Text(
-                                text = selectedEntry?.channel?.name ?: playlistSource.sourceDisplayLabel(),
-                                color = MutedTextColor,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                            )
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        MiniOsdButton(
-                            text = if (showSourceControls) "Fuente" else "Menú",
-                            onClick = { showSourceControls = !showSourceControls },
-                            modifier = Modifier.weight(1f),
-                            active = showSourceControls
-                        )
-                        MiniOsdButton(
-                            text = "Buscar",
-                            onClick = onOpenSearch,
-                            modifier = Modifier.weight(1f),
-                            active = searchQuery.isNotBlank()
-                        )
-                        MiniOsdButton(
-                            text = "Guía",
-                            onClick = onOpenGuide,
-                            modifier = Modifier.weight(1f),
-                            active = epgSettings.enabled
-                        )
-                        MiniOsdButton(
-                            text = "Ajustes",
-                            onClick = onOpenSettings,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                StatusChip(
-                    text = "${filteredChannels.size} / $totalChannelCount"
-                )
-                StatusChip(
-                    text = selectedGroupTitle,
-                    accent = true
-                )
-                StatusChip(text = "${groups.size} grupos")
-                if (isLoading) {
-                    StatusChip(text = "Cargando")
-                }
-                if (favoriteIds.isNotEmpty()) {
-                    StatusChip(text = "★C ${favoriteIds.size}")
-                }
-                if (favoriteGroupIds.isNotEmpty()) {
-                    StatusChip(text = "★G ${favoriteGroupIds.size}")
-                }
-                if (epgSettings.enabled || isEpgLoading) {
-                    StatusChip(
-                        text = if (isEpgLoading) "EPG…" else "EPG",
-                        accent = epgSettings.enabled
-                    )
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(ItemShape)
-                    .background(SearchStripColor)
-                    .border(1.dp, PanelBorderColor, ItemShape)
-                    .padding(8.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "NAVEGACIÓN",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = when {
-                                searchQuery.isNotBlank() -> "Búsqueda activa en $selectedGroupTitle"
-                                showSelectedGroupChannels -> "Canales del grupo seleccionado"
-                                selectedGroupId == FavoriteChannelsGroupId -> "Canales favoritos por canal o por grupo"
-                                else -> "Selecciona un grupo para abrir sus canales"
-                            },
-                            color = SecondaryTextColor,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                    Text(
-                        text = epgStatus,
-                        color = SecondaryTextColor,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        AppActionButton(
-                            text = "Grupos",
-                            onClick = {
-                                showSelectedGroupChannels = false
-                                groupListFocusToken += 1
-                            },
-                            modifier = Modifier.weight(0.95f),
-                            enabled = showSelectedGroupChannels,
-                            primary = showSelectedGroupChannels
-                        )
-                        AppActionButton(
-                            text = if (selectedGroupId == AllChannelsGroupId && searchQuery.isBlank()) "Todos" else "Reset",
-                            onClick = {
-                                onQueryInputChange("")
-                                onSelectGroup(AllChannelsGroupId)
-                                showSelectedGroupChannels = true
-                                channelListFocusToken += 1
-                            },
-                            modifier = Modifier.weight(1.05f),
-                            enabled = !isLoading && (selectedGroupId != AllChannelsGroupId || searchQuery.isNotBlank()),
-                            primary = selectedGroupId != AllChannelsGroupId || searchQuery.isNotBlank()
-                        )
-                    }
-                }
-            }
-
-            if (showSourceControls) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(ItemShape)
-                        .background(InputBackgroundColor)
-                        .border(1.dp, PanelBorderColor, ItemShape)
-                        .padding(8.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(
-                            value = url,
-                            onValueChange = onUrlChange,
-                            label = { Text("URL M3U") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                            enabled = !isLoading,
-                            singleLine = true,
-                            shape = ItemShape,
-                            colors = appTextFieldColors(),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                            AppActionButton(
-                                text = "URL",
-                                onClick = onLoadUrl,
-                                enabled = !isLoading,
-                                primary = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            AppActionButton(
-                                text = "Archivo",
-                                onClick = onLoadFile,
-                                enabled = !isLoading,
-                                modifier = Modifier.weight(1f)
-                            )
-                            AppActionButton(
-                                text = "Recargar",
-                                onClick = onReloadLastPlaylist,
-                                enabled = !isLoading && playlistSource != null,
-                                modifier = Modifier.weight(1f)
-                            )
-                            AppActionButton(
-                                text = "About",
-                                onClick = onOpenAbout,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        Text(
-                            text = if (isLoading) "Procesando lista..." else status,
-                            color = SecondaryTextColor,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(ItemShape)
+                    .background(StatusChipAccentColor.copy(alpha = 0.32f))
+                    .border(1.dp, PrimaryButtonColor.copy(alpha = 0.5f), ItemShape)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    Text(
-                        text = if (showSelectedGroupChannels) "CANALES" else "GRUPOS TV",
-                        color = SecondaryTextColor,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = if (showSelectedGroupChannels) selectedGroupDisplayTitle else selectedGroupDisplayTitle,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (selectedGroup?.isFavorite == true) {
-                        StatusChip(text = "Grupo favorito")
-                    }
-                    StatusChip(
-                        text = if (showSelectedGroupChannels) filteredChannels.size.toString() else groups.size.toString(),
-                        accent = true
-                    )
-                }
-            }
-            if (!showSelectedGroupChannels) {
-                if (canToggleSelectedGroupFavorite) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AppActionButton(
-                            text = "Cargar grupo",
-                            onClick = {
-                                showSelectedGroupChannels = true
-                                channelListFocusToken += 1
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .focusRequester(loadGroupFocusRequester),
-                            enabled = groups.isNotEmpty() && !isLoading,
-                            primary = true
-                        )
-                        AppActionButton(
-                            text = if (selectedGroup?.isFavorite == true) "★ Quitar favorito" else "☆ Marcar grupo",
-                            onClick = { onToggleFavoriteGroup(selectedGroupId) },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isLoading,
-                            primary = selectedGroup?.isFavorite != true
-                        )
-                    }
-                } else {
-                    AppActionButton(
-                        text = "Cargar grupo",
-                        onClick = {
-                            showSelectedGroupChannels = true
-                            channelListFocusToken += 1
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(loadGroupFocusRequester),
-                        enabled = groups.isNotEmpty() && !isLoading,
-                        primary = true
-                    )
-                }
-            }
-            if (showSelectedGroupChannels) {
-                ChannelList(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    filteredChannels = filteredChannels,
-                    favoriteIds = favoriteIds,
-                    favoriteGroupIds = favoriteGroupIds,
-                    currentPrograms = currentPrograms,
-                    showChannelLogos = showChannelLogos,
-                    selectedIndex = selectedIndex,
-                    selectedVisibleIndex = selectedVisibleIndex,
-                    focusRequestToken = channelListFocusToken,
-                    onBackToGroups = {
-                        showSelectedGroupChannels = false
-                        groupListFocusToken += 1
-                    },
-                    onToggleFavorite = onToggleFavorite,
-                    onSelectChannel = onSelectChannel
+                Image(
+                    painter = painterResource(id = R.drawable.miptvga),
+                    contentDescription = AppLogoDescription,
+                    modifier = Modifier.size(26.dp)
                 )
-            } else {
-                GroupList(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        text = selectedGroupTitle,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                    )
+                    Text(
+                        text = selectedEntry?.channel?.name
+                            ?: if (isLoading) "Cargando…" else "${filteredChannels.size} canales",
+                        color = MutedTextColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                    )
+                }
+                StatusChip(
+                    text = filteredChannels.size.toString(),
+                    accent = true
+                )
+            }
+
+            BottomActionBar(
+                onOpenSearch = onOpenSearch,
+                onOpenGuide = onOpenGuide,
+                onOpenSettings = onOpenSettings,
+                onOpenAbout = onOpenAbout,
+                epgEnabled = epgSettings.enabled
+            )
+
+            if (groups.size > 1) {
+                HorizontalGroupStrip(
+                    modifier = Modifier.fillMaxWidth(),
                     groups = groups,
                     selectedGroupId = selectedGroupId,
-                    isLoading = isLoading,
-                    focusRequestToken = groupListFocusToken,
                     onSelectGroup = { groupId ->
-                        showSelectedGroupChannels = false
-                        focusLoadGroupButton = true
                         onSelectGroup(groupId)
+                        channelListFocusToken += 1
                     }
                 )
             }
+
+            ChannelList(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                filteredChannels = filteredChannels,
+                favoriteIds = favoriteIds,
+                favoriteGroupIds = favoriteGroupIds,
+                currentPrograms = currentPrograms,
+                showChannelLogos = showChannelLogos,
+                selectedIndex = selectedIndex,
+                selectedVisibleIndex = selectedVisibleIndex,
+                focusRequestToken = channelListFocusToken,
+                onBackToGroups = null,
+                onToggleFavorite = onToggleFavorite,
+                onSelectChannel = onSelectChannel
+            )
         }
     }
 }
@@ -2393,16 +2430,18 @@ private fun FileBrowserScreen(
         }
     }
 
+    val windowMetrics = rememberAppWindowMetrics()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackgroundColor)
-            .padding(20.dp)
+            .padding(windowMetrics.screenPadding)
     ) {
         AppPanel(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 18.dp),
+            verticalArrangement = Arrangement.spacedBy(if (windowMetrics.isCompact) 10.dp else 14.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2580,6 +2619,120 @@ private fun FileBrowserRow(
 }
 
 @Composable
+private fun HorizontalGroupStrip(
+    modifier: Modifier = Modifier,
+    groups: List<ChannelGroup>,
+    selectedGroupId: String,
+    onSelectGroup: (String) -> Unit
+) {
+    if (groups.isEmpty()) return
+
+    val listState = rememberLazyListState()
+    val selectedIndex = groups.indexOfFirst { it.id == selectedGroupId }.coerceAtLeast(0)
+
+    LaunchedEffect(selectedIndex, groups.size) {
+        if (selectedIndex >= 0 && groups.isNotEmpty()) {
+            listState.animateScrollToItem(selectedIndex)
+        }
+    }
+
+    LazyRow(
+        state = listState,
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp)
+    ) {
+        items(
+            items = groups,
+            key = { it.id }
+        ) { group ->
+            val interactionSource = remember { MutableInteractionSource() }
+            val isFocused by interactionSource.collectIsFocusedAsState()
+            val selected = group.id == selectedGroupId
+            val isActive = selected || isFocused
+
+            Box(
+                modifier = Modifier
+                    .clip(ChipShape)
+                    .background(
+                        when {
+                            selected && isFocused -> PrimaryButtonColor
+                            selected -> StatusChipAccentColor
+                            isFocused -> FocusedSecondaryColor
+                            else -> StatusChipColor
+                        }
+                    )
+                    .border(
+                        width = if (isFocused) 2.dp else 1.dp,
+                        color = when {
+                            isFocused -> FocusHighlightColor
+                            selected -> PrimaryButtonColor.copy(alpha = 0.7f)
+                            else -> PanelBorderColor
+                        },
+                        shape = ChipShape
+                    )
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = { onSelectGroup(group.id) }
+                    )
+                    .hoverable(interactionSource = interactionSource)
+                    .focusable(interactionSource = interactionSource)
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = when {
+                            group.id == FavoriteChannelsGroupId -> "★ ${group.title}"
+                            group.isFavorite -> "★ ${group.title}"
+                            else -> group.title
+                        },
+                        color = if (isActive) Color.White else SecondaryTextColor,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = group.count.toString(),
+                        color = if (isActive) Color.White.copy(alpha = 0.7f) else SecondaryTextColor.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BottomActionBar(
+    modifier: Modifier = Modifier,
+    onOpenSearch: () -> Unit,
+    onOpenGuide: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAbout: () -> Unit,
+    epgEnabled: Boolean
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(PanelShape)
+            .background(PanelColor)
+            .border(1.dp, PanelBorderColor, PanelShape)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        MiniOsdButton(text = "Buscar", onClick = onOpenSearch, modifier = Modifier.weight(1f))
+        MiniOsdButton(text = "Guía EPG", onClick = onOpenGuide, modifier = Modifier.weight(1f), active = epgEnabled)
+        MiniOsdButton(text = "Ajustes", onClick = onOpenSettings, modifier = Modifier.weight(1f))
+        MiniOsdButton(text = "About", onClick = onOpenAbout, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
 private fun GroupList(
     modifier: Modifier = Modifier,
     groups: List<ChannelGroup>,
@@ -2651,12 +2804,22 @@ private fun GroupRow(
             .clip(ItemShape)
             .background(
                 when {
+                    selected && isFocused -> ChannelRowSelectedColor
                     selected -> ChannelRowSelectedColor.copy(alpha = 0.78f)
-                    isFocused -> PanelColorElevated
+                    isFocused -> FocusedSecondaryColor
+                    isHovered -> PanelColorElevated
                     else -> GroupSectionColor
                 }
             )
-            .border(1.dp, if (isActive) PrimaryButtonColor else PanelBorderColor.copy(alpha = 0.65f), ItemShape)
+            .border(
+                width = if (isFocused) 2.dp else 1.dp,
+                color = when {
+                    isFocused -> FocusHighlightColor
+                    selected -> PrimaryButtonColor
+                    else -> PanelBorderColor.copy(alpha = 0.65f)
+                },
+                shape = ItemShape
+            )
             .focusRequester(focusRequester)
             .clickable(
                 interactionSource = interactionSource,
@@ -2816,11 +2979,18 @@ private fun ChannelRow(
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isActive = selected || isFocused
     val backgroundColor = when {
+        selected && isFocused -> ChannelRowSelectedColor
         selected -> ChannelRowSelectedColor.copy(alpha = 0.86f)
-        isFocused -> PanelColorElevated
+        isFocused -> FocusedSecondaryColor
+        isHovered -> PanelColorElevated
         else -> ChannelRowColor
     }
-    val accentColor = if (selected || isFocused) PrimaryButtonColor else PanelBorderColor.copy(alpha = 0.55f)
+    val accentColor = when {
+        isFocused -> FocusHighlightColor
+        selected -> PrimaryButtonColor
+        else -> PanelBorderColor.copy(alpha = 0.55f)
+    }
+    val borderWidth = if (isFocused) 2.dp else 1.dp
 
     LaunchedEffect(focusRequestToken, requestInitialFocus) {
         if (focusRequestToken > 0 && requestInitialFocus) {
@@ -2834,7 +3004,7 @@ private fun ChannelRow(
             .clip(ItemShape)
             .background(backgroundColor)
             .border(
-                width = 1.dp,
+                width = borderWidth,
                 color = accentColor,
                 shape = ItemShape
             )
@@ -3062,6 +3232,7 @@ private fun PlayerPanel(
     onPlaybackStarted: () -> Unit,
     onPlaybackError: (String?) -> Unit
 ) {
+    val windowMetrics = rememberAppWindowMetrics()
     val fullscreenTransitionToken = remember(selectedChannel?.playbackUrl) { mutableIntStateOf(0) }
     var playbackControllerState by remember(selectedChannel?.playbackUrl, playbackBackend) {
         mutableStateOf(PlaybackControllerState())
@@ -3072,6 +3243,16 @@ private fun PlayerPanel(
     val handleFullscreenToggle = {
         fullscreenTransitionToken.intValue += 1
         onToggleFullscreen()
+    }
+    val chromePadding = when {
+        isFullscreen -> 0.dp
+        windowMetrics.isCompact -> 8.dp
+        else -> 12.dp
+    }
+    val chromeInnerPadding = when {
+        isFullscreen -> 0.dp
+        windowMetrics.isCompact -> 6.dp
+        else -> 10.dp
     }
 
     PlayerControlsAutoHideEffect(
@@ -3088,57 +3269,104 @@ private fun PlayerPanel(
                     Modifier.background(Color.Black)
                 } else {
                     Modifier
-                        .padding(12.dp)
+                        .padding(chromePadding)
                         .clip(PanelShape)
                         .background(PanelColor)
                         .border(1.dp, PanelBorderColor, PanelShape)
-                        .padding(10.dp)
+                        .padding(chromeInnerPadding)
                 }
             ),
         verticalArrangement = Arrangement.spacedBy(if (isFullscreen) 0.dp else 10.dp)
     ) {
         if (!isFullscreen) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            if (windowMetrics.isCompact) {
                 Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = selectedChannel?.name ?: "Vista previa",
-                        color = Color.White,
-                        maxLines = 1,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = selectedChannel?.group?.takeIf { it.isNotBlank() }
-                            ?: "Carga una lista y selecciona un canal para empezar",
-                        color = SecondaryTextColor,
-                        maxLines = 1,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    playbackMessage?.let { message ->
-                        StatusChip(
-                            text = message,
-                            accent = !playbackMessageIsError
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = selectedChannel?.name ?: "Vista previa",
+                            color = Color.White,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = selectedChannel?.group?.takeIf { it.isNotBlank() }
+                                ?: "Carga una lista y selecciona un canal para empezar",
+                            color = SecondaryTextColor,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                    AppActionButton(
-                        text = "Fullscreen",
-                        onClick = onToggleFullscreen,
-                        modifier = Modifier.width(122.dp)
-                    )
-                    AppActionButton(
-                        text = "Ajustes",
-                        onClick = onOpenSettings,
-                        modifier = Modifier.width(112.dp)
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        playbackMessage?.let { message ->
+                            StatusChip(
+                                text = message,
+                                accent = !playbackMessageIsError
+                            )
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        AppActionButton(
+                            text = "Fullscreen",
+                            onClick = onToggleFullscreen,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        AppActionButton(
+                            text = "Ajustes",
+                            onClick = onOpenSettings,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = selectedChannel?.name ?: "Vista previa",
+                            color = Color.White,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = selectedChannel?.group?.takeIf { it.isNotBlank() }
+                                ?: "Carga una lista y selecciona un canal para empezar",
+                            color = SecondaryTextColor,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        playbackMessage?.let { message ->
+                            StatusChip(
+                                text = message,
+                                accent = !playbackMessageIsError
+                            )
+                        }
+                        AppActionButton(
+                            text = "Fullscreen",
+                            onClick = onToggleFullscreen,
+                            modifier = Modifier.widthIn(min = 100.dp, max = 122.dp)
+                        )
+                        AppActionButton(
+                            text = "Ajustes",
+                            onClick = onOpenSettings,
+                            modifier = Modifier.widthIn(min = 96.dp, max = 112.dp)
+                        )
+                    }
                 }
             }
         }
@@ -3196,40 +3424,59 @@ private fun PlayerPanel(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(
+                        Row(
                             modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = selectedChannel.name,
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1
+                            ChannelLogo(
+                                showChannelLogos = showChannelLogos,
+                                logoUrl = selectedChannel.logoUrl,
+                                channelName = selectedChannel.name,
+                                modifier = Modifier
+                                    .width(48.dp)
+                                    .height(30.dp)
                             )
-                            Text(
-                                text = selectedChannel.group?.takeIf { it.isNotBlank() }
-                                    ?: playlistSource.sourceDisplayLabel(),
-                                color = MutedTextColor,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1
-                            )
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = selectedChannel.name,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = selectedChannel.group?.takeIf { it.isNotBlank() }
+                                        ?: playlistSource.sourceDisplayLabel(),
+                                    color = MutedTextColor,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1
+                                )
+                            }
                         }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             StatusChip(
+                                text = if (playbackControllerState.isLive) "LIVE" else "VOD",
+                                accent = playbackControllerState.isLive
+                            )
+                            StatusChip(
                                 text = when {
-                                    selectedChannelGroupIsFavorite && selectedChannelIsIndividuallyFavorite -> "Canal + grupo"
-                                    selectedChannelGroupIsFavorite -> "Grupo favorito"
-                                    selectedChannelIsIndividuallyFavorite -> "Canal favorito"
-                                    selectedChannelIsFavorite -> "Favorito"
-                                    else -> "Directo"
+                                    selectedChannelGroupIsFavorite && selectedChannelIsIndividuallyFavorite -> "★ Canal + grupo"
+                                    selectedChannelGroupIsFavorite -> "★ Grupo"
+                                    selectedChannelIsIndividuallyFavorite -> "★ Canal"
+                                    selectedChannelIsFavorite -> "★"
+                                    else -> playbackBackend.displayName()
                                 },
-                                accent = true
+                                accent = selectedChannelIsFavorite
                             )
                             selectedChannelGroup?.let { group ->
-                                StatusChip(text = "${group.count} canales · ${group.title}")
+                                StatusChip(text = "${group.count} · ${group.title}")
                             }
                             playbackMessage?.let { message ->
                                 StatusChip(text = message, accent = !playbackMessageIsError)
@@ -3244,10 +3491,12 @@ private fun PlayerPanel(
                         }
                     }
                 }
+            }
 
+            if (controlsVisible && selectedChannel != null && selectedChannel.playbackUrl.isNotBlank()) {
                 PlayerBottomControlsOverlay(
                     modifier = Modifier.align(Alignment.BottomCenter),
-                    bottomPadding = 88.dp,
+                    bottomPadding = if (windowMetrics.isCompact) 56.dp else 88.dp,
                     playbackControllerState = playbackControllerState,
                     playbackControllerActions = playbackControllerActions,
                     selectedChannelIsFavorite = selectedChannelIsIndividuallyFavorite,
@@ -3283,20 +3532,25 @@ private fun PlayerBottomControlsOverlay(
     onOpenSettings: () -> Unit,
     onInputActivity: () -> Unit
 ) {
+    val windowMetrics = rememberAppWindowMetrics()
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, bottom = bottomPadding),
+            .padding(
+                start = if (windowMetrics.isCompact) 10.dp else 16.dp,
+                end = if (windowMetrics.isCompact) 10.dp else 16.dp,
+                bottom = bottomPadding
+            ),
         contentAlignment = Alignment.Center
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 840.dp)
+                .widthIn(max = windowMetrics.maxContentWidth)
                 .clip(ItemShape)
                 .background(PlayerOverlayColor)
                 .border(1.dp, PanelBorderColor, ItemShape)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = if (windowMetrics.isCompact) 8.dp else 10.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -3527,16 +3781,16 @@ private fun FullscreenPlayerPanel(
                     ) {
                         StatusChip(
                             text = when {
-                                selectedChannelGroupIsFavorite && selectedChannelIsIndividuallyFavorite -> "Canal + grupo"
-                                selectedChannelGroupIsFavorite -> "Grupo favorito"
-                                selectedChannelIsIndividuallyFavorite -> "Canal favorito"
-                                selectedChannelIsFavorite -> "Favorito"
+                                selectedChannelGroupIsFavorite && selectedChannelIsIndividuallyFavorite -> "★ Canal + grupo"
+                                selectedChannelGroupIsFavorite -> "★ Grupo"
+                                selectedChannelIsIndividuallyFavorite -> "★ Canal"
+                                selectedChannelIsFavorite -> "★"
                                 else -> "Directo"
                             },
                             accent = true
                         )
                         selectedChannelGroup?.let { group ->
-                            StatusChip(text = "${group.count} canales · ${group.title}")
+                            StatusChip(text = "${group.count} · ${group.title}")
                         }
                         playbackMessage?.let { message ->
                             StatusChip(text = message, accent = !playbackMessageIsError)

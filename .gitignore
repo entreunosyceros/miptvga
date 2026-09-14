@@ -13,7 +13,7 @@ captures/
 *.ap_
 output-metadata.json
 
-# Test outputs / reports
+# Test outputs / reportes
 **/test-results/
 **/reports/
 
@@ -21,10 +21,10 @@ output-metadata.json
 **/src/test/**
 **/src/androidTest/**
 
-# Local Android SDK config
+# Local Android SDK configuración
 local.properties
 
-# Personal firma
+# Firma personal
 keystore.properties
 keystore.properties.*
 !keystore.properties.example

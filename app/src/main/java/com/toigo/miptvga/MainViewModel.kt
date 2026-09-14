@@ -13,21 +13,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.media3.common.util.UnstableApi
 import java.io.File
 import java.util.LinkedHashMap
 import java.util.Locale
 
 private const val SearchDebounceMillis = 220L
 private const val EpgRefreshIntervalMillis = 60_000L
-private const val XtreamKeepAliveInitialDelayMillis = 15_000L
+private const val XtreamKeepAliveInitialDelayMillis = 2_000L
+private const val XtreamKeepAliveRetryDelayMillis = 8_000L
 private const val AutoEpgChannelLimit = 40_000
 
+@UnstableApi
 internal class MainViewModel(
     private val appContext: Context,
     private val repository: PlaylistRepository,
     private val epgRepository: EpgRepository,
     private val fileBrowserRepository: FileBrowserRepository,
-    private val lastPlaylistStore: LastPlaylistStore
+    private val lastPlaylistStore: LastPlaylistStore,
+    private val networkMonitor: NetworkMonitor
 ) : ViewModel() {
 
     private val initialEpgSettings = lastPlaylistStore.readEpgSettings()
@@ -56,9 +60,36 @@ internal class MainViewModel(
     private var xtreamKeepAliveJob: Job? = null
     private var epgTimelinesByKey: Map<String, List<CurrentProgram>> = emptyMap()
     private var xtreamKeepAliveSignature: String? = null
+    private var consecutivePlaybackFailures = 0
+    private val backendFallbackThreshold = 3
+
+    val isNetworkAvailable: StateFlow<Boolean> = networkMonitor.isConnected
+
+    private val _storageInfo = MutableStateFlow(StorageInfo.Empty)
+    val storageInfo: StateFlow<StorageInfo> = _storageInfo.asStateFlow()
 
     init {
+        networkMonitor.start()
+        viewModelScope.launch {
+            var wasConnected = networkMonitor.isConnected.value
+            networkMonitor.isConnected.collect { connected ->
+                if (!wasConnected && connected) {
+                    val state = _uiState.value
+                    val channel = state.channels.getOrNull(state.selectedIndex)
+                    if (channel != null && isXtreamStreamUrl(channel.playbackUrl)) {
+                        restartXtreamKeepAliveIfNeeded(forceRestart = true)
+                        _uiState.value = state.copy(
+                            playbackMessage = "Red recuperada · reanudando sesión Xtream",
+                            playbackMessageIsError = false,
+                            controlsVisible = true
+                        )
+                    }
+                }
+                wasConnected = connected
+            }
+        }
         restoreLastPlaylist()
+        refreshStorageInfo()
     }
 
     fun loadFromUrl(url: String) {
@@ -268,7 +299,6 @@ internal class MainViewModel(
         if (index !in _uiState.value.channels.indices) return
         if (_uiState.value.selectedIndex == index && _uiState.value.controlsVisible) return
         val channel = _uiState.value.channels[index]
-        stopXtreamKeepAlive()
         _uiState.value = _uiState.value.copy(
             selectedIndex = index,
             selectedVisibleIndex = filteredIndexByOriginalIndex[index] ?: -1,
@@ -277,6 +307,9 @@ internal class MainViewModel(
             playbackMessage = "Abriendo canal…",
             playbackMessageIsError = false
         )
+        // Start Xtream session ping ASAP so the panel does not drop the connection
+        // while the player is still connecting.
+        restartXtreamKeepAliveIfNeeded(forceRestart = true)
     }
 
     fun showControls(show: Boolean) {
@@ -433,6 +466,7 @@ internal class MainViewModel(
     }
 
     fun onPlaybackStarted(channelName: String) {
+        consecutivePlaybackFailures = 0
         _uiState.value = _uiState.value.copy(
             status = "Reproduciendo: $channelName",
             playbackMessage = "En reproducción",
@@ -453,15 +487,43 @@ internal class MainViewModel(
     }
 
     fun onPlaybackError(channelName: String, detail: String?) {
-        stopXtreamKeepAlive()
+        val selected = _uiState.value.channels.getOrNull(_uiState.value.selectedIndex)
+        val isXtream = selected?.let { isXtreamStreamUrl(it.playbackUrl) } == true
+        // Keep Xtream session alive during reconnect attempts; only stop for non-Xtream.
+        if (!isXtream) {
+            stopXtreamKeepAlive()
+        }
+        consecutivePlaybackFailures++
+
+        val currentBackend = _uiState.value.playbackBackend
+        val alternativeBackend = when (currentBackend) {
+            PlaybackBackend.VLC -> PlaybackBackend.EXOPLAYER
+            PlaybackBackend.EXOPLAYER -> PlaybackBackend.VLC
+        }
+
         val errorMessage = detail?.takeIf { it.isNotBlank() } ?: "No se pudo reproducir este canal"
-        _uiState.value = _uiState.value.copy(
-            status = "Error de reproducción: $channelName",
-            playbackMessage = errorMessage,
-            playbackMessageIsError = true,
-            controlsVisible = true,
-            isLoading = false
-        )
+
+        if (consecutivePlaybackFailures >= backendFallbackThreshold) {
+            consecutivePlaybackFailures = 0
+            val fallbackMessage = "$errorMessage · Cambiando a ${alternativeBackend.displayName()} automáticamente"
+            lastPlaylistStore.savePlaybackBackend(alternativeBackend)
+            _uiState.value = _uiState.value.copy(
+                status = "Fallback: $channelName → ${alternativeBackend.displayName()}",
+                playbackBackend = alternativeBackend,
+                playbackMessage = fallbackMessage,
+                playbackMessageIsError = true,
+                controlsVisible = true,
+                isLoading = false
+            )
+        } else {
+            _uiState.value = _uiState.value.copy(
+                status = "Error de reproducción: $channelName",
+                playbackMessage = errorMessage,
+                playbackMessageIsError = true,
+                controlsVisible = true,
+                isLoading = false
+            )
+        }
     }
 
     fun prepareForBackgroundExit() {
@@ -963,7 +1025,7 @@ internal class MainViewModel(
         }
 
         val channel = _uiState.value.channels.getOrNull(_uiState.value.selectedIndex)
-        if (channel == null || !shouldApplyLivePlaybackHandling(channel.playbackUrl)) {
+        if (channel == null || !isXtreamStreamUrl(channel.playbackUrl)) {
             stopXtreamKeepAlive()
             return
         }
@@ -986,8 +1048,13 @@ internal class MainViewModel(
         xtreamKeepAliveJob = viewModelScope.launch {
             delay(XtreamKeepAliveInitialDelayMillis)
             while (true) {
-                repository.sendXtreamKeepAlive(request)
-                delay(settings.intervalSeconds * 1_000L)
+                val ok = repository.sendXtreamKeepAlive(request)
+                if (ok) {
+                    delay(settings.intervalSeconds * 1_000L)
+                } else {
+                    // Panel may be busy or flaky — retry sooner instead of waiting full interval.
+                    delay(XtreamKeepAliveRetryDelayMillis)
+                }
             }
         }
     }
@@ -998,8 +1065,103 @@ internal class MainViewModel(
         xtreamKeepAliveSignature = null
     }
 
+    @UnstableApi
+    fun clearPlaybackCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            PlaybackCache.releaseAndClear(appContext)
+            refreshStorageInfo()
+        }
+        showMaintenanceMessage("Caché de reproducción limpiada")
+    }
+
+    fun clearImageCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            ImageLoaderConfig.clearAllCaches(appContext)
+            refreshStorageInfo()
+        }
+        showMaintenanceMessage("Caché de imágenes limpiada")
+    }
+
+    @UnstableApi
+    fun clearAllCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            PlaybackCache.releaseAndClear(appContext)
+            ImageLoaderConfig.clearAllCaches(appContext)
+            clearGeneralAppCache()
+            refreshStorageInfo()
+        }
+        showMaintenanceMessage("Todo el caché ha sido limpiado")
+    }
+
+    fun resetPreferences() {
+        lastPlaylistStore.clearAll()
+        val clearedState = UiState()
+        _uiState.value = clearedState
+        indexedChannels = emptyList()
+        cachedGroups = emptyList()
+        filteredIndexByOriginalIndex = emptyMap()
+        epgTimelinesByKey = emptyMap()
+        stopXtreamKeepAlive()
+        epgRefreshJob?.cancel()
+        showMaintenanceMessage("Preferencias restablecidas")
+    }
+
+    @UnstableApi
+    fun resetApp() {
+        viewModelScope.launch(Dispatchers.IO) {
+            PlaybackCache.releaseAndClear(appContext)
+            ImageLoaderConfig.clearAllCaches(appContext)
+            clearGeneralAppCache()
+        }
+        resetPreferences()
+        refreshStorageInfo()
+        showMaintenanceMessage("Aplicación restablecida por completo")
+    }
+
+    @UnstableApi
+    fun refreshStorageInfo() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val playbackCacheSize = PlaybackCache.cacheSizeBytes(appContext)
+            val imageCacheSize = ImageLoaderConfig.diskCacheSizeBytes(appContext)
+            val appCacheSize = calculateAppCacheSize()
+            _storageInfo.value = StorageInfo(
+                playbackCacheBytes = playbackCacheSize,
+                imageCacheBytes = imageCacheSize,
+                appCacheBytes = appCacheSize,
+                totalBytes = playbackCacheSize + imageCacheSize + appCacheSize
+            )
+        }
+    }
+
+    private fun calculateAppCacheSize(): Long {
+        val cacheDir = appContext.cacheDir ?: return 0L
+        return cacheDir.walkTopDown()
+            .filter { it.isFile }
+            .filter { !it.absolutePath.contains("media_stream_cache") }
+            .filter { !it.absolutePath.contains("coil_image_cache") }
+            .sumOf { it.length() }
+    }
+
+    private fun clearGeneralAppCache() {
+        val cacheDir = appContext.cacheDir ?: return
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.name != "media_stream_cache" && file.name != "coil_image_cache") {
+                file.deleteRecursively()
+            }
+        }
+    }
+
+    private fun showMaintenanceMessage(message: String) {
+        _uiState.value = _uiState.value.copy(
+            playbackMessage = message,
+            playbackMessageIsError = false,
+            controlsVisible = true
+        )
+    }
+
     override fun onCleared() {
         stopXtreamKeepAlive()
+        networkMonitor.stop()
         epgRefreshJob?.cancel()
         filterJob?.cancel()
         super.onCleared()
@@ -1099,6 +1261,7 @@ internal class MainViewModel(
     }
 
     companion object {
+        @UnstableApi
         internal fun factory(applicationContext: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -1110,7 +1273,8 @@ internal class MainViewModel(
                     repository = repo,
                     epgRepository = EpgRepository(playlistLoader, XmltvParser()),
                     fileBrowserRepository = FileBrowserRepository(),
-                    lastPlaylistStore = LastPlaylistStore(appContext)
+                    lastPlaylistStore = LastPlaylistStore(appContext),
+                    networkMonitor = NetworkMonitor(appContext)
                 ) as T
             }
         }

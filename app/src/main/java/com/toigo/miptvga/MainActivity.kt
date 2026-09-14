@@ -18,6 +18,7 @@ import androidx.activity.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
+import coil.Coil
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -31,6 +32,8 @@ class MainActivity : ComponentActivity() {
     private var finishOnStopRequested = false
     private var backgroundExitHandled = false
     private var backgroundCloseJob: Job? = null
+    private var numberInputBuffer = StringBuilder()
+    private var numberInputJob: Job? = null
     private var shutdownReceiverRegistered = false
     private val shutdownReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -48,6 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Coil.setImageLoader(ImageLoaderConfig.get(applicationContext))
         registerShutdownReceiver()
         setContent {
             MiptvgaTheme {
@@ -95,6 +99,51 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        if (event.action == KeyEvent.ACTION_UP) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_CHANNEL_UP -> {
+                    navigateChannel(forward = true)
+                    return true
+                }
+                KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                    navigateChannel(forward = false)
+                    return true
+                }
+                KeyEvent.KEYCODE_PROG_RED -> {
+                    vm.toggleFavoriteForSelected()
+                    return true
+                }
+                KeyEvent.KEYCODE_PROG_GREEN -> {
+                    vm.openGuide()
+                    return true
+                }
+                KeyEvent.KEYCODE_PROG_YELLOW -> {
+                    vm.openSearch()
+                    return true
+                }
+                KeyEvent.KEYCODE_PROG_BLUE -> {
+                    vm.openSettings()
+                    return true
+                }
+                KeyEvent.KEYCODE_INFO -> {
+                    vm.openChannelInfo()
+                    return true
+                }
+                KeyEvent.KEYCODE_GUIDE -> {
+                    vm.openGuide()
+                    return true
+                }
+            }
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            val digit = keyCodeToDigit(event.keyCode)
+            if (digit != null) {
+                appendNumberInput(digit)
+                return true
+            }
+        }
+
         return super.dispatchKeyEvent(event)
     }
 
@@ -127,6 +176,56 @@ class MainActivity : ComponentActivity() {
         unregisterShutdownReceiver()
         PlaybackCache.releaseAndClear(applicationContext)
         super.onDestroy()
+    }
+
+    private fun keyCodeToDigit(keyCode: Int): Char? = when (keyCode) {
+        KeyEvent.KEYCODE_0, KeyEvent.KEYCODE_NUMPAD_0 -> '0'
+        KeyEvent.KEYCODE_1, KeyEvent.KEYCODE_NUMPAD_1 -> '1'
+        KeyEvent.KEYCODE_2, KeyEvent.KEYCODE_NUMPAD_2 -> '2'
+        KeyEvent.KEYCODE_3, KeyEvent.KEYCODE_NUMPAD_3 -> '3'
+        KeyEvent.KEYCODE_4, KeyEvent.KEYCODE_NUMPAD_4 -> '4'
+        KeyEvent.KEYCODE_5, KeyEvent.KEYCODE_NUMPAD_5 -> '5'
+        KeyEvent.KEYCODE_6, KeyEvent.KEYCODE_NUMPAD_6 -> '6'
+        KeyEvent.KEYCODE_7, KeyEvent.KEYCODE_NUMPAD_7 -> '7'
+        KeyEvent.KEYCODE_8, KeyEvent.KEYCODE_NUMPAD_8 -> '8'
+        KeyEvent.KEYCODE_9, KeyEvent.KEYCODE_NUMPAD_9 -> '9'
+        else -> null
+    }
+
+    private fun appendNumberInput(digit: Char) {
+        numberInputJob?.cancel()
+        numberInputBuffer.append(digit)
+        numberInputJob = lifecycleScope.launch {
+            delay(1200L)
+            val channelNumber = numberInputBuffer.toString().toIntOrNull()
+            numberInputBuffer.clear()
+            if (channelNumber != null) {
+                jumpToChannelNumber(channelNumber)
+            }
+        }
+    }
+
+    private fun jumpToChannelNumber(number: Int) {
+        val state = vm.uiState.value
+        if (state.filteredChannels.isEmpty()) return
+        val targetIndex = (number - 1).coerceIn(0, state.filteredChannels.size - 1)
+        val entry = state.filteredChannels.getOrNull(targetIndex) ?: return
+        vm.selectChannel(entry.originalIndex)
+    }
+
+    private fun navigateChannel(forward: Boolean) {
+        val state = vm.uiState.value
+        if (state.filteredChannels.isEmpty()) return
+
+        val currentVisibleIndex = state.selectedVisibleIndex
+        val nextVisibleIndex = if (forward) {
+            if (currentVisibleIndex + 1 < state.filteredChannels.size) currentVisibleIndex + 1 else 0
+        } else {
+            if (currentVisibleIndex - 1 >= 0) currentVisibleIndex - 1 else state.filteredChannels.size - 1
+        }
+
+        val nextEntry = state.filteredChannels.getOrNull(nextVisibleIndex) ?: return
+        vm.selectChannel(nextEntry.originalIndex)
     }
 
     private fun handleMouseBackGesture(eventTime: Long): Boolean {
@@ -236,4 +335,3 @@ private fun MotionEvent.isSecondaryMouseAction(): Boolean {
             action == MotionEvent.ACTION_UP
         )
 }
-

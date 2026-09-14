@@ -1,79 +1,98 @@
 # miptvga
+
 <div align="center">
-<img width="781" height="757" alt="miptvga" src="https://github.com/user-attachments/assets/9c21a4fb-6e74-4ac4-9f1e-2cbb22f58f8e" />
+<img src="app/src/main/res/drawable/miptvga.png" alt="miptvga" width="280" />
+
+**miptvga** · Make IPTV Great Again
 </div>
 
-Aplicación IPTV para **Android TV** y cajas Android orientada a listas M3U grandes. Permite cargar listas por URL o desde archivo local, navegar por grupos y canales, marcar favoritos y reproducir emisiones en directo con una interfaz pensada para televisor y mando a distancia.
+Aplicación IPTV para **Android TV**, cajas Android, tablets y móviles. Carga listas **M3U** (URL o archivo local), organiza miles de canales, reproduce con **VLC** o **ExoPlayer** y se adapta al tamaño de pantalla.
 
-## Qué hace esta app
+Versión actual: **1.1** (`versionCode` 2).
 
-- Carga listas **M3U** desde URL.
-- Carga listas M3U desde **archivo local**.
-- Interfaz adaptada a **Android TV / Leanback launcher**.
-- Navegación por **grupos de canales**.
-- **Búsqueda** por nombre de canal o grupo.
-- **Favoritos** por canal y por grupo.
-- Pantalla de **guía EPG/XMLTV**.
-- Reproducción con **VLC** o **Media3 ExoPlayer**.
-- Modo de compatibilidad de vídeo para equipos problemáticos.
-- Soporte para listas muy grandes.
+## Descargar APK
+
+El APK se publica en [**Releases**](https://github.com/entreunosyceros/miptvga/releases) de este repositorio (no va dentro del código fuente; `*.apk` está en `.gitignore`).
+
+1. Abre la [última release](https://github.com/entreunosyceros/miptvga/releases/latest).
+2. Descarga **`miptvga.apk`**.
+3. Instálalo en el televisor, caja Android o dispositivo (permite orígenes desconocidos si hace falta).
+
+También puedes compilarlo tú mismo (ver [Compilación](#compilación)).
+
+## Qué hay de nuevo en 1.1
+
+- Interfaz **adaptable** a pantallas compactas, medianas y TV (panel apilado o lateral).
+- Mejor soporte **Xtream Codes**: keep-alive configurable y reconexión más robusta.
+- Reconexión automática en streams HTTP(S) y listas remotas.
+- Panel lateral simplificado (acciones arriba, grupos y canales más claros).
+- Explorador interno de archivos para M3U/M3U8.
+- Pantallas de búsqueda, guía EPG, info de canal, ajustes y about.
+- Icono y recursos visuales actualizados.
+- Salida de build unificada como **`miptvga.apk`**.
+
+## Características
+
+- Carga listas **M3U / M3U8** por URL o archivo local.
+- Navegación por **grupos**, **búsqueda** y **favoritos** (canal y grupo).
+- **Guía EPG / XMLTV** opcional.
+- Reproducción con **LibVLC** o **Media3 ExoPlayer**.
+- Modo de compatibilidad de vídeo.
+- Fullscreen con controles OSD (play/pausa, seek / timeshift en live cuando aplica).
+- Recuerda la última lista cargada.
+- Pensada para **Leanback** (Android TV) y mando a distancia, usable también en móvil/tablet.
 
 ## Stack técnico
 
-- **Kotlin**
-- **Jetpack Compose**
-- **Android Gradle Plugin 9.1.0**
-- **Kotlin 2.2.10**
-- **compileSdk 35 / targetSdk 35 / minSdk 24**
-- **VLC** (`libvlc-all`)
-- **AndroidX Media3 ExoPlayer**
+| Pieza | Detalle |
+| --- | --- |
+| Lenguaje | Kotlin |
+| UI | Jetpack Compose + Material 3 |
+| SDK | compile/target **35**, minSdk **24** |
+| Reproductores | VLC (`libvlc-all`) · Media3 ExoPlayer |
+| Red | OkHttp · monitor de red |
+| Imágenes | Coil |
 
-## Requisitos
+## Requisitos para compilar
 
 - **JDK 17** o superior
-- Android SDK instalado localmente
-- Un dispositivo/emulador con Android TV o Android compatible
-- Gradle Wrapper incluido en el proyecto
+- Android SDK local
+- Dispositivo/emulador Android TV o Android compatible
+- Gradle Wrapper del proyecto
 
-## Estructura básica del proyecto
+## Estructura del proyecto
 
 ```text
 miptvga/
 ├── app/
+│   ├── build.gradle.kts
+│   └── src/main/
+│       ├── java/com/toigo/miptvga/   # pantallas, player, parsers, Xtream…
+│       │   ├── AdaptiveLayout.kt    # métricas por tamaño de pantalla
+│       │   ├── AppScreens.kt        # UI principal
+│       │   └── ui/                  # pantallas auxiliares / componentes
+│       └── res/                     # iconos, logo, banner TV, temas
 ├── gradle/
 ├── build.gradle.kts
 ├── settings.gradle.kts
-├── gradle.properties
+├── keystore.properties.example
 ├── README.md
 └── .gitignore
 ```
 
 ## Configuración local
 
-### 1. SDK de Android
+### SDK de Android
 
-El archivo `local.properties` **no debe subirse al repositorio**. Debe existir solo en tu máquina con una ruta parecida a esta:
+`local.properties` es local y **no** se sube al repo:
 
 ```properties
 sdk.dir=/ruta/a/tu/Android/Sdk
 ```
 
-Ejemplo típico en Linux:
+### Firma release (opcional)
 
-```properties
-sdk.dir=/home/TU_USUARIO/Android/Sdk
-```
-
-### 2. Firma release opcional
-
-El proyecto admite firma local para compilar una versión `release` firmada. Para ello utiliza:
-
-- `keystore.properties`
-- un archivo de keystore dentro de `keystore/`
-
-Estos archivos **son privados** y están excluidos por `.gitignore`.
-
-Si necesitas preparar tu entorno local, puedes partir del archivo de ejemplo `keystore.properties.example` y adaptarlo con tus propios datos.
+Para un `release` firmado usa `keystore.properties` y un keystore en `keystore/` (ambos ignorados por git). Parte de `keystore.properties.example`.
 
 ## Compilación
 
@@ -83,69 +102,75 @@ Si necesitas preparar tu entorno local, puedes partir del archivo de ejemplo `ke
 ./gradlew assembleDebug
 ```
 
-APK generada normalmente en:
+Salida:
 
 ```text
-app/build/outputs/apk/debug/app-debug.apk
+app/build/outputs/apk/debug/miptvga.apk
 ```
 
-### Ejecutar tests unitarios
+(`assembleDebug` copia/renombra automáticamente a `miptvga.apk`.)
+
+### Tests
 
 ```bash
 ./gradlew testDebugUnitTest
 ```
 
-### Compilar release
+### APK release
 
 ```bash
 ./gradlew assembleRelease
 ```
 
-### Generar APK release con nombre fijo
-
-```bash
-./gradlew packageNamedReleaseApk
-```
-
-Salida esperada:
+Salida:
 
 ```text
-app/build/outputs/apk/release/miptvga-release.apk
+app/build/outputs/apk/release/miptvga.apk
 ```
 
-### Generar bundle
+### Bundle (Play Store)
 
 ```bash
 ./gradlew bundleRelease
 ```
 
+## Publicar el APK en GitHub
+
+Recomendado: **GitHub Releases** (no commits del binario).
+
+1. Compila el APK (`assembleDebug` o `assembleRelease`).
+2. En GitHub → **Releases** → **Draft a new release**.
+3. Etiqueta p. ej. `v1.1`, título y notas (puedes reutilizar [Qué hay de nuevo](#qué-hay-de-nuevo-en-11)).
+4. Adjunta `miptvga.apk` y publica.
+
+Los enlaces de descarga del README apuntan a `/releases` y `/releases/latest`.
+
 ## Uso rápido
 
-1. Abre la app en tu Android TV o caja Android.
-2. Carga una lista M3U desde **URL** o desde **archivo local**.
-3. Selecciona un grupo y luego un canal.
-4. Si lo necesitas, abre **Ajustes** para cambiar backend de reproducción, EPG o compatibilidad de vídeo.
-5. Marca canales o grupos como favoritos para acceder más rápido.
+1. Abre la app en el televisor, caja o móvil.
+2. Carga una lista M3U por **URL** o **archivo** (explorador interno o picker).
+3. Elige grupo y canal; usa **Buscar**, **Guía** o **Favoritos** si lo necesitas.
+4. En **Ajustes**: backend (VLC/ExoPlayer), EPG, keep-alive Xtream, compatibilidad de vídeo.
+5. **Fullscreen** para ver a pantalla completa.
 
 ## Recursos visuales
 
-- Logo principal: `app/src/main/res/drawable/miptvga.png`
+- Logo: `app/src/main/res/drawable/miptvga.png`
 - Banner TV: `app/src/main/res/drawable/tv_banner.*`
-- Iconos launcher: recursos `mipmap`
+- Launcher: `mipmap` / adaptive icons
 
-## Privacidad y publicación en GitHub
+## Privacidad del repositorio
 
-Antes de subir el proyecto a GitHub, verifica que **no** incluyes:
+No subas:
 
 - `local.properties`
-- `keystore.properties`
-- archivos `.jks` / `.keystore`
-- la carpeta `keystore/`
-- carpetas generadas como `build/` o `.gradle/`
+- `keystore.properties` / `*.jks` / `*.keystore` / `keystore/`
+- carpetas `build/` o `.gradle/`
 
-Este repositorio ya queda preparado para ello mediante `.gitignore`.
+Los APK van en **Releases**, no en el árbol del código (están ignorados con `*.apk`).
 
 ## Notas
 
-- La aplicación está configurada como launcher estándar y también como **LEANBACK_LAUNCHER** para Android TV.
-- Si una compilación `release` no tiene firma configurada localmente, el comportamiento dependerá de tu entorno de build y del flujo que quieras usar para firmar después.
+- La app declara launcher normal y **LEANBACK_LAUNCHER** para Android TV.
+- Sin firma release configurada, `assembleRelease` puede generar un APK no firmado o firmado según tu entorno; para distribución usa firma propia o el APK de la Release publicada.
+- Uso destinado a listas IPTV legales a las que tengas acceso legítimo.

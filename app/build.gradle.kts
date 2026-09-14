@@ -82,21 +82,43 @@ kotlin {
     }
 }
 
-tasks.register("packageNamedReleaseApk") {
-    dependsOn("assembleRelease")
-
+tasks.register("renameDebugApkToMiptvga") {
     doLast {
-        val releaseDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
-        val sourceApk = releaseDir
-            .listFiles()
-            ?.filter { it.isFile && it.extension == "apk" }
-            ?.firstOrNull { it.name.contains("release") && it.name != "miptvga-release.apk" }
-            ?: error("No se encontró el APK release generado en ${releaseDir.absolutePath}")
-
-        val targetApk = releaseDir.resolve("miptvga-release.apk")
-        sourceApk.copyTo(targetApk, overwrite = true)
-        println("APK final: ${targetApk.absolutePath}")
+        copyNamedApk(
+            sourceDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile,
+            targetName = "miptvga.apk"
+        )
     }
+}
+
+tasks.register("renameReleaseApkToMiptvga") {
+    doLast {
+        copyNamedApk(
+            sourceDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile,
+            targetName = "miptvga.apk"
+        )
+    }
+}
+
+afterEvaluate {
+    tasks.named("assembleDebug").configure {
+        finalizedBy("renameDebugApkToMiptvga")
+    }
+    tasks.named("assembleRelease").configure {
+        finalizedBy("renameReleaseApkToMiptvga")
+    }
+}
+
+fun copyNamedApk(sourceDir: java.io.File, targetName: String) {
+    val sourceApk = sourceDir
+        .listFiles()
+        ?.filter { it.isFile && it.extension == "apk" && it.name != targetName }
+        ?.maxByOrNull { it.lastModified() }
+        ?: error("No se encontró el APK generado en ${sourceDir.absolutePath}")
+
+    val targetApk = sourceDir.resolve(targetName)
+    sourceApk.copyTo(targetApk, overwrite = true)
+    println("APK final: ${targetApk.absolutePath}")
 }
 
 dependencies {
@@ -127,6 +149,7 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.5.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test:2.0.21")

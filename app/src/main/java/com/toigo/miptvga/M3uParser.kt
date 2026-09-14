@@ -162,8 +162,9 @@ internal class M3uParser {
 
     private fun normalizeHeaderName(rawKey: String): String? {
         if (rawKey.isBlank()) return null
-        val normalizedKey = rawKey.trim().lowercase()
-        return KnownHeaderAliases[normalizedKey]
+        val trimmedKey = rawKey.trim()
+        val normalizedKey = trimmedKey.lowercase()
+        return KnownHeaderAliases[normalizedKey] ?: trimmedKey
     }
 
     private data class PlaybackSource(

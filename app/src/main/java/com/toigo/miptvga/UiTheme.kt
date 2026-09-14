@@ -27,40 +27,65 @@ private val MiptvgaColorScheme = darkColorScheme(
 )
 
 private val MiptvgaShapes = Shapes(
-    small = RoundedCornerShape(2.dp),
-    medium = RoundedCornerShape(2.dp),
-    large = RoundedCornerShape(2.dp)
+    small = RoundedCornerShape(4.dp),
+    medium = RoundedCornerShape(6.dp),
+    large = RoundedCornerShape(8.dp)
 )
 
 private val MiptvgaTypography = Typography(
+    headlineLarge = TextStyle(
+        fontSize = 36.sp,
+        lineHeight = 44.sp,
+        fontWeight = FontWeight.Bold
+    ),
     headlineMedium = TextStyle(
         fontSize = 30.sp,
         lineHeight = 36.sp,
         fontWeight = FontWeight.SemiBold
     ),
     titleLarge = TextStyle(
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
+        fontSize = 24.sp,
+        lineHeight = 30.sp,
         fontWeight = FontWeight.SemiBold
     ),
     titleMedium = TextStyle(
-        fontSize = 18.sp,
-        lineHeight = 24.sp,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
+        fontWeight = FontWeight.Medium
+    ),
+    titleSmall = TextStyle(
+        fontSize = 17.sp,
+        lineHeight = 22.sp,
         fontWeight = FontWeight.Medium
     ),
     bodyLarge = TextStyle(
+        fontSize = 18.sp,
+        lineHeight = 24.sp,
+        fontWeight = FontWeight.Normal
+    ),
+    bodyMedium = TextStyle(
         fontSize = 16.sp,
         lineHeight = 22.sp,
         fontWeight = FontWeight.Normal
     ),
-    bodyMedium = TextStyle(
+    bodySmall = TextStyle(
         fontSize = 14.sp,
-        lineHeight = 20.sp,
+        lineHeight = 18.sp,
         fontWeight = FontWeight.Normal
     ),
     labelLarge = TextStyle(
+        fontSize = 16.sp,
+        lineHeight = 20.sp,
+        fontWeight = FontWeight.Medium
+    ),
+    labelMedium = TextStyle(
         fontSize = 14.sp,
         lineHeight = 18.sp,
+        fontWeight = FontWeight.Medium
+    ),
+    labelSmall = TextStyle(
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
         fontWeight = FontWeight.Medium
     )
 )
@@ -74,4 +99,3 @@ internal fun MiptvgaTheme(content: @Composable () -> Unit) {
         content = content
     )
 }
-
