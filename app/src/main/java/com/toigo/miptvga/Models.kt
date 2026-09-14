@@ -362,8 +362,10 @@ internal fun nextProgramForChannel(
 internal fun String.normalizeEpgLookupKey(): String {
     return trim()
         .lowercase()
-        .replace(Regex("\\s+"), " ")
+        .replace(EpgWhitespaceRegex, " ")
 }
+
+private val EpgWhitespaceRegex = Regex("\\s+")
 
 internal fun XtreamKeepAliveSettings.sanitized(): XtreamKeepAliveSettings {
     val normalizedInterval = intervalSeconds.coerceIn(30, 60)

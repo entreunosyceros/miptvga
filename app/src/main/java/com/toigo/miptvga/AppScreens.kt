@@ -818,8 +818,8 @@ private fun GuideScreen(
     }
 
     LaunchedEffect(focusTargetIndex, ui.filteredChannels.size) {
-        if (focusTargetIndex >= 0) {
-            listState.scrollToItem(focusTargetIndex)
+        if (focusTargetIndex in ui.filteredChannels.indices) {
+            runCatching { listState.scrollToItem(focusTargetIndex) }
         }
     }
 
@@ -833,30 +833,42 @@ private fun GuideScreen(
         val groupsStripHeight = windowMetrics.guideStackedGroupsHeight(maxHeight)
         val groupsColumnWidth = windowMetrics.guideGroupsWidth(maxWidth)
 
-        AppPanel(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            if (useVerticalLayout) {
-                TvGuideHeader(
-                    ui = ui,
-                    onOpenMain = vm::openMain,
-                    onOpenSearch = vm::openSearch,
-                    onRefreshEpg = vm::refreshEpg,
-                    onOpenSettings = vm::openSettings
-                )
-                GroupList(
+        if (useVerticalLayout) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                AppPanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(if (windowMetrics.isCompact) 12.dp else 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    TvGuideHeader(
+                        ui = ui,
+                        onOpenMain = vm::openMain,
+                        onOpenSearch = vm::openSearch,
+                        onRefreshEpg = vm::refreshEpg,
+                        onOpenSettings = vm::openSettings
+                    )
+                }
+                AppPanel(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(groupsStripHeight),
-                    groups = ui.groups,
-                    selectedGroupId = ui.selectedGroupId,
-                    isLoading = ui.isLoading,
-                    onSelectGroup = vm::selectGroup
-                )
+                    contentPadding = PaddingValues(if (windowMetrics.isCompact) 8.dp else 12.dp)
+                ) {
+                    GroupList(
+                        modifier = Modifier.fillMaxSize(),
+                        groups = ui.groups,
+                        selectedGroupId = ui.selectedGroupId,
+                        isLoading = ui.isLoading,
+                        onSelectGroup = vm::selectGroup
+                    )
+                }
                 TvGuideProgramPanel(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     ui = ui,
                     listState = listState,
                     focusTargetIndex = focusTargetIndex,
@@ -870,57 +882,61 @@ private fun GuideScreen(
                         vm.openChannelInfo()
                     }
                 )
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                AppPanel(
+                    modifier = Modifier
+                        .width(groupsColumnWidth)
+                        .fillMaxHeight(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    AppPanel(
-                        modifier = Modifier
-                            .width(groupsColumnWidth)
-                            .fillMaxHeight(),
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        TvGuideHeader(
-                            ui = ui,
-                            compact = true,
-                            onOpenMain = vm::openMain,
-                            onOpenSearch = vm::openSearch,
-                            onRefreshEpg = vm::refreshEpg,
-                            onOpenSettings = vm::openSettings
-                        )
-                        Text(
-                            text = "GRUPOS",
-                            color = SecondaryTextColor,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        GroupList(
-                            modifier = Modifier.fillMaxSize(),
-                            groups = ui.groups,
-                            selectedGroupId = ui.selectedGroupId,
-                            isLoading = ui.isLoading,
-                            onSelectGroup = vm::selectGroup
-                        )
-                    }
-
-                    TvGuideProgramPanel(
-                        modifier = Modifier.weight(1f),
+                    TvGuideHeader(
                         ui = ui,
-                        listState = listState,
-                        focusTargetIndex = focusTargetIndex,
-                        timeFormatter = timeFormatter,
-                        onSelectChannel = { index ->
-                            vm.selectChannel(index)
-                            vm.openMain()
-                        },
-                        onOpenChannelInfo = { index ->
-                            vm.selectChannel(index)
-                            vm.openChannelInfo()
-                        }
+                        compact = true,
+                        onOpenMain = vm::openMain,
+                        onOpenSearch = vm::openSearch,
+                        onRefreshEpg = vm::refreshEpg,
+                        onOpenSettings = vm::openSettings
+                    )
+                    Text(
+                        text = "GRUPOS",
+                        color = SecondaryTextColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    GroupList(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        groups = ui.groups,
+                        selectedGroupId = ui.selectedGroupId,
+                        isLoading = ui.isLoading,
+                        onSelectGroup = vm::selectGroup
                     )
                 }
+
+                TvGuideProgramPanel(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    ui = ui,
+                    listState = listState,
+                    focusTargetIndex = focusTargetIndex,
+                    timeFormatter = timeFormatter,
+                    onSelectChannel = { index ->
+                        vm.selectChannel(index)
+                        vm.openMain()
+                    },
+                    onOpenChannelInfo = { index ->
+                        vm.selectChannel(index)
+                        vm.openChannelInfo()
+                    }
+                )
             }
         }
     }
@@ -1001,6 +1017,7 @@ private fun TvGuideProgramPanel(
     onOpenChannelInfo: (Int) -> Unit
 ) {
     val selectedGroupTitle = ui.groups.firstOrNull { it.id == ui.selectedGroupId }?.title ?: "Todos los canales"
+    val focusOriginalIndex = ui.filteredChannels.getOrNull(focusTargetIndex)?.originalIndex
 
     AppPanel(
         modifier = modifier.fillMaxSize(),
@@ -1031,7 +1048,7 @@ private fun TvGuideProgramPanel(
         }
 
         if (ui.filteredChannels.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
                     text = "No hay canales en este grupo o filtro.",
                     color = SecondaryTextColor,
@@ -1041,7 +1058,9 @@ private fun TvGuideProgramPanel(
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(
@@ -1056,7 +1075,7 @@ private fun TvGuideProgramPanel(
                         isFavorite = isChannelEntryFavorite(entry, ui.favoriteIds, ui.favoriteGroupIds),
                         showChannelLogos = ui.showChannelLogos,
                         selected = entry.originalIndex == ui.selectedIndex,
-                        requestInitialFocus = ui.filteredChannels.getOrNull(focusTargetIndex)?.originalIndex == entry.originalIndex,
+                        requestInitialFocus = focusOriginalIndex != null && focusOriginalIndex == entry.originalIndex,
                         timeFormatter = timeFormatter,
                         onSelectChannel = { onSelectChannel(entry.originalIndex) },
                         onOpenInfo = { onOpenChannelInfo(entry.originalIndex) }
@@ -1094,7 +1113,9 @@ private fun GuideRow(
 
     LaunchedEffect(requestInitialFocus) {
         if (requestInitialFocus) {
-            focusRequester.requestFocus()
+            // Wait until the focus target is attached; otherwise requestFocus crashes the activity.
+            kotlinx.coroutines.yield()
+            runCatching { focusRequester.requestFocus() }
         }
     }
 
@@ -1889,79 +1910,6 @@ private fun StorageInfoCard(
 private fun groupsTitleForGuide(ui: UiState): String {
     val selectedGroupTitle = ui.groups.firstOrNull { it.id == ui.selectedGroupId }?.title ?: "Todos los canales"
     return "${ui.filteredChannels.size} canales · $selectedGroupTitle"
-}
-
-@Composable
-private fun GuideRow(
-    entry: ChannelListEntry,
-    currentProgram: CurrentProgram?,
-    nextProgram: CurrentProgram?,
-    isFavorite: Boolean,
-    showChannelLogos: Boolean,
-    selected: Boolean,
-    timeFormatter: java.text.DateFormat,
-    onSelectChannel: () -> Unit,
-    onOpenInfo: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val isActive = selected || isFocused
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(ItemShape)
-            .background(if (isActive) PanelColorElevated else ChannelRowColor)
-            .border(1.dp, if (isActive) PrimaryButtonColor else PanelBorderColor, ItemShape)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onSelectChannel)
-            .focusable(interactionSource = interactionSource)
-            .padding(horizontal = 10.dp, vertical = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ChannelLogo(
-                showChannelLogos = showChannelLogos,
-                logoUrl = entry.channel.logoUrl,
-                channelName = entry.channel.name,
-                modifier = Modifier
-                    .width(56.dp)
-                    .height(34.dp)
-            )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    text = if (isFavorite) "★ ${entry.channel.name}" else entry.channel.name,
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1
-                )
-                Text(
-                    text = currentProgram?.let {
-                        "Ahora · ${timeFormatter.formatClock(it.startTimeMillis)}-${timeFormatter.formatClock(it.endTimeMillis)} · ${it.title}"
-                    } ?: "Ahora · Sin información EPG",
-                    color = if (currentProgram != null) MutedTextColor else SecondaryTextColor,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1
-                )
-                Text(
-                    text = nextProgram?.let {
-                        "Siguiente · ${timeFormatter.formatClock(it.startTimeMillis)} · ${it.title}"
-                    } ?: "Siguiente · No disponible",
-                    color = SecondaryTextColor,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1
-                )
-            }
-            AppActionButton(
-                text = "Info",
-                onClick = onOpenInfo,
-                modifier = Modifier.width(92.dp)
-            )
-        }
-    }
 }
 
 @Composable
@@ -2796,7 +2744,8 @@ private fun GroupRow(
 
     LaunchedEffect(requestInitialFocus) {
         if (requestInitialFocus) {
-            focusRequester.requestFocus()
+            kotlinx.coroutines.yield()
+            runCatching { focusRequester.requestFocus() }
         }
     }
 
