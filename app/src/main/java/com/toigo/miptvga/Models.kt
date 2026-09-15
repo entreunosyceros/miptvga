@@ -323,7 +323,7 @@ internal fun buildChannelGroups(
                 count = entries.size
             )
         )
-        addAll(channelGroups)
+        // Keep Favoritos near the start so it is easy to find in long group strips.
         if (favoriteCount > 0) {
             add(
                 ChannelGroup(
@@ -333,6 +333,7 @@ internal fun buildChannelGroups(
                 )
             )
         }
+        addAll(channelGroups)
     }
 }
 

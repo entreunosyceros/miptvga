@@ -47,7 +47,8 @@ internal class LastPlaylistStore(context: Context) {
     }
 
     fun saveFavoriteIds(favoriteIds: Set<String>) {
-        preferences.edit { putStringSet(KeyFavoriteIds, favoriteIds) }
+        // Copy into a new HashSet: SharedPreferences can silently drop mutations of the same instance.
+        preferences.edit { putStringSet(KeyFavoriteIds, HashSet(favoriteIds)) }
     }
 
     fun readFavoriteIds(): Set<String> {
@@ -55,7 +56,7 @@ internal class LastPlaylistStore(context: Context) {
     }
 
     fun saveFavoriteGroupIds(favoriteGroupIds: Set<String>) {
-        preferences.edit { putStringSet(KeyFavoriteGroupIds, favoriteGroupIds) }
+        preferences.edit { putStringSet(KeyFavoriteGroupIds, HashSet(favoriteGroupIds)) }
     }
 
     fun readFavoriteGroupIds(): Set<String> {

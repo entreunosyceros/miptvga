@@ -248,12 +248,13 @@ private fun MiniOsdButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     active: Boolean = false,
+    enabled: Boolean = true,
     onFocus: (() -> Unit)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
-    val highlighted = isFocused || isHovered
+    val highlighted = enabled && (isFocused || isHovered)
 
     LaunchedEffect(isFocused, onFocus) {
         if (isFocused) {
@@ -266,6 +267,7 @@ private fun MiniOsdButton(
             .clip(ItemShape)
             .background(
                 when {
+                    !enabled -> StatusChipColor.copy(alpha = 0.45f)
                     active -> PrimaryButtonColor
                     highlighted -> FocusedSecondaryColor
                     else -> StatusChipColor
@@ -274,6 +276,7 @@ private fun MiniOsdButton(
             .border(
                 width = if (highlighted) 2.dp else 1.dp,
                 color = when {
+                    !enabled -> PanelBorderColor.copy(alpha = 0.45f)
                     highlighted -> FocusHighlightColor
                     active -> PrimaryButtonColor
                     else -> PanelBorderColor
@@ -281,17 +284,18 @@ private fun MiniOsdButton(
                 shape = ItemShape
             )
             .clickable(
+                enabled = enabled,
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick
             )
-            .hoverable(interactionSource = interactionSource)
-            .focusable(interactionSource = interactionSource)
+            .hoverable(enabled = enabled, interactionSource = interactionSource)
+            .focusable(enabled = enabled, interactionSource = interactionSource)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Text(
             text = text,
-            color = Color.White,
+            color = if (enabled) Color.White else SecondaryTextColor,
             style = MaterialTheme.typography.labelLarge
         )
     }
@@ -2278,9 +2282,15 @@ private fun SidePanel(
 
             BottomActionBar(
                 onOpenSearch = onOpenSearch,
+                onOpenFavorites = {
+                    onSelectGroup(FavoriteChannelsGroupId)
+                    channelListFocusToken += 1
+                },
                 onOpenGuide = onOpenGuide,
                 onOpenSettings = onOpenSettings,
                 onOpenAbout = onOpenAbout,
+                hasFavorites = favoriteIds.isNotEmpty() || favoriteGroupIds.isNotEmpty(),
+                favoritesSelected = selectedGroupId == FavoriteChannelsGroupId,
                 epgEnabled = epgSettings.enabled
             )
 
@@ -2660,9 +2670,12 @@ private fun HorizontalGroupStrip(
 private fun BottomActionBar(
     modifier: Modifier = Modifier,
     onOpenSearch: () -> Unit,
+    onOpenFavorites: () -> Unit,
     onOpenGuide: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
+    hasFavorites: Boolean,
+    favoritesSelected: Boolean,
     epgEnabled: Boolean
 ) {
     Row(
@@ -2676,7 +2689,14 @@ private fun BottomActionBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         MiniOsdButton(text = "Buscar", onClick = onOpenSearch, modifier = Modifier.weight(1f))
-        MiniOsdButton(text = "Guía EPG", onClick = onOpenGuide, modifier = Modifier.weight(1f), active = epgEnabled)
+        MiniOsdButton(
+            text = "★ Fav",
+            onClick = onOpenFavorites,
+            modifier = Modifier.weight(1f),
+            active = favoritesSelected,
+            enabled = hasFavorites
+        )
+        MiniOsdButton(text = "Guía", onClick = onOpenGuide, modifier = Modifier.weight(1f), active = epgEnabled)
         MiniOsdButton(text = "Ajustes", onClick = onOpenSettings, modifier = Modifier.weight(1f))
         MiniOsdButton(text = "About", onClick = onOpenAbout, modifier = Modifier.weight(1f))
     }
