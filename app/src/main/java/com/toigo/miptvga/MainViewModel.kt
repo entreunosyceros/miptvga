@@ -396,6 +396,9 @@ internal class MainViewModel(
             markWatched(finishedIndex)
         }
 
+        // Free Xtream/panel slot before opening the next item (or leaving idle).
+        stopXtreamKeepAlive()
+
         val queue = continuousPlayOriginalIndices
         val positionInQueue = queue.indexOf(finishedIndex)
         val nextIndex = if (positionInQueue >= 0) queue.getOrNull(positionInQueue + 1) else null

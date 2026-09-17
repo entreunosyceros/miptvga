@@ -79,8 +79,8 @@ private const val PlaybackSeekStepMillis = 10_000L
 private const val PlaybackStatePollingMillis = 500L
 private const val FullscreenTransitionGuardMillis = 1_100L
 /** Give IPTV panels time to free the previous client slot before opening the next stream. */
-private const val ChannelSwitchTeardownMillis = 350L
-private const val ChannelSwitchTeardownXtreamMillis = 550L
+private const val ChannelSwitchTeardownMillis = 450L
+private const val ChannelSwitchTeardownXtreamMillis = 700L
 private const val FullscreenTransitionRecoveryCheckMillis = 900L
 private val ProgressiveVodExtensions = setOf(
     ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".aac", ".flac", ".wav", ".m4a", ".webm", ".ogg"
@@ -205,7 +205,14 @@ private fun VlcPlayerSurface(
             )
         )
     }
-    val mediaPlayer = remember(libVlc) {
+    DisposableEffect(libVlc) {
+        onDispose {
+            runCatching { libVlc.release() }
+        }
+    }
+
+    // Fresh MediaPlayer per stream so the previous TCP/HTTP session is fully released on zapping.
+    val mediaPlayer = remember(libVlc, streamUrl, requestHeaders) {
         MediaPlayer(libVlc).apply {
             setVideoTrackEnabled(true)
         }
@@ -274,6 +281,9 @@ private fun VlcPlayerSurface(
                             currentStreamUrl.value.isNotBlank() &&
                             !reconnectPending.value
 
+                    // Always drop the active session first so the panel frees the slot.
+                    releaseVlcPlaybackSession(mediaPlayer)
+
                     if (shouldReconnect) {
                         if (fullscreenTransitionActive.value) {
                             requestSoftReconnect()
@@ -322,11 +332,9 @@ private fun VlcPlayerSurface(
             playbackActionSnapshot.value = PlaybackControllerActions()
             playbackStateSnapshot.value = PlaybackControllerState()
             mediaPlayer.setEventListener(null)
-            runCatching { mediaPlayer.stop() }
-            runCatching { mediaPlayer.media = null }
+            releaseVlcPlaybackSession(mediaPlayer)
             runCatching { mediaPlayer.detachViews() }
             runCatching { mediaPlayer.release() }
-            runCatching { libVlc.release() }
         }
     }
 
@@ -364,7 +372,7 @@ private fun VlcPlayerSurface(
                         reconnectPending.value = false
                         reconnectAttempt.intValue = 0
                         endReconnectAttempt.intValue = 0
-                        runCatching { mediaPlayer.stop() }
+                        releaseVlcPlaybackSession(mediaPlayer)
                     }
                 }
                 Lifecycle.Event.ON_RESUME -> {
@@ -385,8 +393,7 @@ private fun VlcPlayerSurface(
     LaunchedEffect(mediaPlayer, streamUrl, requestHeaders, reconnectToken.intValue, surfaceReady.value) {
         val sanitizedUrl = streamUrl.trim()
         if (sanitizedUrl.isBlank()) {
-            runCatching { mediaPlayer.stop() }
-            runCatching { mediaPlayer.media = null }
+            releaseVlcPlaybackSession(mediaPlayer)
             return@LaunchedEffect
         }
         if (!surfaceReady.value) return@LaunchedEffect
@@ -401,13 +408,8 @@ private fun VlcPlayerSurface(
             )
         }
 
-        runCatching {
-            // Close the previous HTTP/TS session before opening the next channel.
-            // Many IPTV panels only allow one concurrent connection per account.
-            mediaPlayer.stop()
-            mediaPlayer.media = null
-        }
-
+        // Close any leftover session before opening the next channel/video.
+        releaseVlcPlaybackSession(mediaPlayer)
         kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
 
         runCatching {
@@ -449,7 +451,7 @@ private fun VlcPlayerSurface(
         }
     }
 
-    key(videoCompatibilityMode) {
+    key(videoCompatibilityMode, mediaPlayer) {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
@@ -649,6 +651,12 @@ private fun ExoPlayerSurface(
                         shouldRecoverEndedPlayback(playbackUrlInfo) &&
                             currentStreamUrl.value.isNotBlank() &&
                             !reconnectPending.value
+                    // Close the network session before advancing / ending.
+                    runCatching {
+                        exoPlayer.playWhenReady = false
+                        exoPlayer.stop()
+                        exoPlayer.clearMediaItems()
+                    }
                     if (shouldReconnect) {
                         if (fullscreenTransitionActive.value) {
                             requestSoftReconnect()
@@ -1272,6 +1280,11 @@ private fun channelSwitchTeardownMillis(url: String): Long {
     } else {
         ChannelSwitchTeardownMillis
     }
+}
+
+private fun releaseVlcPlaybackSession(mediaPlayer: MediaPlayer) {
+    runCatching { mediaPlayer.stop() }
+    runCatching { mediaPlayer.media = null }
 }
 
 private fun maxReconnectAttemptsForStream(url: String, isLive: Boolean, error: PlaybackException? = null): Int {
