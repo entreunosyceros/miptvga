@@ -120,6 +120,7 @@ internal fun PlayerPanel(
     onAutoHide: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit = {},
     onPlaybackError: (String?) -> Unit
 ) {
     val fullscreenTransitionToken = remember(selectedChannel?.playbackUrl) { mutableIntStateOf(0) }
@@ -233,6 +234,7 @@ internal fun PlayerPanel(
                     onToggleFullscreen = handleFullscreenToggle,
                     onReconnectScheduled = onReconnectScheduled,
                     onPlaybackStarted = onPlaybackStarted,
+                    onPlaybackEnded = onPlaybackEnded,
                     onPlaybackError = onPlaybackError,
                     onPlaybackControllerStateChanged = { playbackControllerState = it },
                     onPlaybackControllerActionsChanged = { playbackControllerActions = it }
@@ -518,6 +520,7 @@ internal fun FullscreenPlayerPanel(
     onAutoHide: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit = {},
     onPlaybackError: (String?) -> Unit
 ) {
     Box(
@@ -540,6 +543,7 @@ internal fun FullscreenPlayerPanel(
                 onToggleFullscreen = onToggleFullscreen,
                 onReconnectScheduled = onReconnectScheduled,
                 onPlaybackStarted = onPlaybackStarted,
+                onPlaybackEnded = onPlaybackEnded,
                 onPlaybackError = onPlaybackError,
                 onPlaybackControllerStateChanged = { },
                 onPlaybackControllerActionsChanged = { }

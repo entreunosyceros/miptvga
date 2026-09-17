@@ -21,11 +21,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +55,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -74,6 +79,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -790,12 +799,20 @@ private fun SearchScreen(
                 filteredChannels = ui.filteredChannels,
                 favoriteIds = ui.favoriteIds,
                 favoriteGroupIds = ui.favoriteGroupIds,
+                watchedIds = ui.watchedIds,
                 currentPrograms = ui.currentPrograms,
                 showChannelLogos = ui.showChannelLogos,
                 selectedIndex = ui.selectedIndex,
                 selectedVisibleIndex = ui.selectedVisibleIndex,
                 listResetKey = ui.searchQuery,
+                continuousPlayActive = ui.continuousPlayActive,
                 onToggleFavorite = vm::toggleFavorite,
+                onToggleWatched = vm::toggleWatched,
+                onPlayContinuousFrom = {
+                    vm.playContinuousFrom(it)
+                    vm.openMain()
+                },
+                onStopContinuousPlay = vm::stopContinuousPlay,
                 onSelectChannel = {
                     vm.selectChannel(it)
                     vm.openMain()
@@ -2155,6 +2172,10 @@ private fun MainScreen(
             onPlaybackStarted = {
                 selectedChannel?.let { channel -> vm.onPlaybackStarted(channel.name) }
             },
+            onPlaybackEnded = {
+                val channelName = selectedChannel?.name ?: "Vídeo"
+                vm.onPlaybackEnded(channelName)
+            },
             onPlaybackError = { message ->
                 val channelName = selectedChannel?.name ?: "Canal"
                 vm.onPlaybackError(channelName, message)
@@ -2184,6 +2205,8 @@ private fun MainScreen(
                 filteredChannels = ui.filteredChannels,
                 favoriteIds = ui.favoriteIds,
                 favoriteGroupIds = ui.favoriteGroupIds,
+                watchedIds = ui.watchedIds,
+                continuousPlayActive = ui.continuousPlayActive,
                 showChannelLogos = ui.showChannelLogos,
                 onOpenAbout = onOpenAbout,
                 onOpenSearch = vm::openSearch,
@@ -2191,6 +2214,9 @@ private fun MainScreen(
                 onOpenSettings = vm::openSettings,
                 onSelectGroup = vm::selectGroup,
                 onToggleFavorite = vm::toggleFavorite,
+                onToggleWatched = vm::toggleWatched,
+                onPlayContinuousFrom = vm::playContinuousFrom,
+                onStopContinuousPlay = vm::stopContinuousPlay,
                 onSelectChannel = vm::selectChannel
             )
         }
@@ -2211,6 +2237,8 @@ private fun SidePanel(
     filteredChannels: List<ChannelListEntry>,
     favoriteIds: Set<String>,
     favoriteGroupIds: Set<String>,
+    watchedIds: Set<String>,
+    continuousPlayActive: Boolean,
     showChannelLogos: Boolean,
     onOpenAbout: () -> Unit,
     onOpenSearch: () -> Unit,
@@ -2218,6 +2246,9 @@ private fun SidePanel(
     onOpenSettings: () -> Unit,
     onSelectGroup: (String) -> Unit,
     onToggleFavorite: (Int) -> Unit,
+    onToggleWatched: (Int) -> Unit,
+    onPlayContinuousFrom: (Int) -> Unit,
+    onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
     val panelModifier = if (widthOverride != null) {
@@ -2313,14 +2344,19 @@ private fun SidePanel(
                 filteredChannels = filteredChannels,
                 favoriteIds = favoriteIds,
                 favoriteGroupIds = favoriteGroupIds,
+                watchedIds = watchedIds,
                 currentPrograms = currentPrograms,
                 showChannelLogos = showChannelLogos,
                 selectedIndex = selectedIndex,
                 selectedVisibleIndex = selectedVisibleIndex,
                 listResetKey = selectedGroupId,
                 focusRequestToken = channelListFocusToken,
+                continuousPlayActive = continuousPlayActive,
                 onBackToGroups = null,
                 onToggleFavorite = onToggleFavorite,
+                onToggleWatched = onToggleWatched,
+                onPlayContinuousFrom = onPlayContinuousFrom,
+                onStopContinuousPlay = onStopContinuousPlay,
                 onSelectChannel = onSelectChannel
             )
         }
@@ -2858,20 +2894,26 @@ private fun GroupRow(
 }
 
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelList(
     modifier: Modifier = Modifier,
     filteredChannels: List<ChannelListEntry>,
     favoriteIds: Set<String>,
     favoriteGroupIds: Set<String>,
+    watchedIds: Set<String>,
     currentPrograms: Map<String, CurrentProgram>,
     showChannelLogos: Boolean,
     selectedIndex: Int,
     selectedVisibleIndex: Int,
     listResetKey: Any? = null,
     focusRequestToken: Int = 0,
+    continuousPlayActive: Boolean = false,
     onBackToGroups: (() -> Unit)? = null,
     onToggleFavorite: (Int) -> Unit,
+    onToggleWatched: (Int) -> Unit,
+    onPlayContinuousFrom: (Int) -> Unit,
+    onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
     if (filteredChannels.isEmpty()) {
@@ -2922,37 +2964,49 @@ private fun ChannelList(
             ChannelRow(
                 entry = entry,
                 isFavorite = isChannelEntryFavorite(entry, favoriteIds, favoriteGroupIds),
+                isWatched = entry.favoriteId in watchedIds,
                 currentProgram = currentProgramForChannel(entry.channel, currentPrograms),
                 showChannelLogos = showChannelLogos,
                 selected = entry.originalIndex == selectedIndex,
                 requestInitialFocus = focusOriginalIndex != null && focusOriginalIndex == entry.originalIndex,
                 focusRequestToken = focusRequestToken,
+                continuousPlayActive = continuousPlayActive,
                 onBackToGroups = onBackToGroups,
                 onToggleFavorite = onToggleFavorite,
+                onToggleWatched = onToggleWatched,
+                onPlayContinuousFrom = onPlayContinuousFrom,
+                onStopContinuousPlay = onStopContinuousPlay,
                 onSelectChannel = onSelectChannel
             )
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelRow(
     modifier: Modifier = Modifier,
     entry: ChannelListEntry,
     isFavorite: Boolean,
+    isWatched: Boolean,
     currentProgram: CurrentProgram?,
     showChannelLogos: Boolean,
     selected: Boolean,
     requestInitialFocus: Boolean,
     focusRequestToken: Int,
+    continuousPlayActive: Boolean,
     onBackToGroups: (() -> Unit)?,
     onToggleFavorite: (Int) -> Unit,
+    onToggleWatched: (Int) -> Unit,
+    onPlayContinuousFrom: (Int) -> Unit,
+    onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    var menuExpanded by remember { mutableStateOf(false) }
     val isActive = selected || isFocused
     val backgroundColor = when {
         selected && isFocused -> ChannelRowSelectedColor
@@ -2967,10 +3021,15 @@ private fun ChannelRow(
         else -> PanelBorderColor.copy(alpha = 0.55f)
     }
     val borderWidth = if (isFocused) 2.dp else 1.dp
+    val titlePrefix = buildString {
+        if (isWatched) append("✓ ")
+        if (isFavorite) append("★ ")
+    }
 
     LaunchedEffect(focusRequestToken, requestInitialFocus) {
         if (focusRequestToken > 0 && requestInitialFocus) {
-            focusRequester.requestFocus()
+            kotlinx.coroutines.yield()
+            runCatching { focusRequester.requestFocus() }
         }
     }
 
@@ -2985,22 +3044,38 @@ private fun ChannelRow(
                 shape = ItemShape
             )
             .focusRequester(focusRequester)
-            .clickable(
+            .combinedClickable(
                 interactionSource = interactionSource,
-                indication = null
-            ) { onSelectChannel(entry.originalIndex) }
-            .hoverable(interactionSource = interactionSource)
-            .onPreviewKeyEvent { event ->
-                if (event.nativeKeyEvent.action == AndroidViewKeyEvent.ACTION_DOWN &&
-                    event.nativeKeyEvent.keyCode == AndroidViewKeyEvent.KEYCODE_DPAD_LEFT
-                ) {
-                    onBackToGroups?.invoke()
-                    true
-                } else {
-                    false
+                indication = null,
+                onClick = { onSelectChannel(entry.originalIndex) },
+                onLongClick = { menuExpanded = true }
+            )
+            .pointerInput(entry.originalIndex) {
+                awaitEachGesture {
+                    val event = awaitPointerEvent(PointerEventPass.Main)
+                    if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
+                        menuExpanded = true
+                    }
                 }
             }
-            .padding(horizontal = 0.dp, vertical = 0.dp)
+            .hoverable(interactionSource = interactionSource)
+            .onPreviewKeyEvent { event ->
+                if (event.nativeKeyEvent.action != AndroidViewKeyEvent.ACTION_DOWN) {
+                    return@onPreviewKeyEvent false
+                }
+                when (event.nativeKeyEvent.keyCode) {
+                    AndroidViewKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        onBackToGroups?.invoke()
+                        true
+                    }
+                    AndroidViewKeyEvent.KEYCODE_MENU,
+                    AndroidViewKeyEvent.KEYCODE_INFO -> {
+                        menuExpanded = true
+                        true
+                    }
+                    else -> false
+                }
+            }
             .focusable(interactionSource = interactionSource)
     ) {
         Row(
@@ -3039,8 +3114,8 @@ private fun ChannelRow(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = if (isFavorite) "★ ${entry.channel.name}" else entry.channel.name,
-                        color = Color.White,
+                        text = "$titlePrefix${entry.channel.name}",
+                        color = if (isWatched && !selected) SecondaryTextColor else Color.White,
                         maxLines = 1,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
@@ -3066,6 +3141,9 @@ private fun ChannelRow(
                         )
                     }
                 }
+                if (isWatched) {
+                    StatusChip(text = "Visto", accent = false)
+                }
                 MiniOsdButton(
                     text = if (isFavorite) "★" else "☆",
                     onClick = { onToggleFavorite(entry.originalIndex) },
@@ -3080,6 +3158,49 @@ private fun ChannelRow(
                     )
                 }
             }
+        }
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Reproducir") },
+                onClick = {
+                    menuExpanded = false
+                    onSelectChannel(entry.originalIndex)
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Reproducir desde aquí") },
+                onClick = {
+                    menuExpanded = false
+                    onPlayContinuousFrom(entry.originalIndex)
+                }
+            )
+            if (continuousPlayActive && selected) {
+                DropdownMenuItem(
+                    text = { Text("Detener lista continua") },
+                    onClick = {
+                        menuExpanded = false
+                        onStopContinuousPlay()
+                    }
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(if (isWatched) "Marcar como no visto" else "Marcar como visto") },
+                onClick = {
+                    menuExpanded = false
+                    onToggleWatched(entry.originalIndex)
+                }
+            )
+            DropdownMenuItem(
+                text = { Text(if (isFavorite) "Quitar de favoritos" else "Añadir a favoritos") },
+                onClick = {
+                    menuExpanded = false
+                    onToggleFavorite(entry.originalIndex)
+                }
+            )
         }
     }
 }
@@ -3206,6 +3327,7 @@ private fun PlayerPanel(
     onAutoHide: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit,
     onPlaybackError: (String?) -> Unit
 ) {
     val windowMetrics = rememberAppWindowMetrics()
@@ -3377,6 +3499,7 @@ private fun PlayerPanel(
                     onToggleFullscreen = handleFullscreenToggle,
                     onReconnectScheduled = onReconnectScheduled,
                     onPlaybackStarted = onPlaybackStarted,
+                    onPlaybackEnded = onPlaybackEnded,
                     onPlaybackError = onPlaybackError,
                     onPlaybackControllerStateChanged = { playbackControllerState = it },
                     onPlaybackControllerActionsChanged = { playbackControllerActions = it }
@@ -3688,6 +3811,7 @@ private fun FullscreenPlayerPanel(
     onAutoHide: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit,
     onPlaybackError: (String?) -> Unit
 ) {
     Box(
@@ -3710,6 +3834,7 @@ private fun FullscreenPlayerPanel(
                 onToggleFullscreen = onToggleFullscreen,
                 onReconnectScheduled = onReconnectScheduled,
                 onPlaybackStarted = onPlaybackStarted,
+                onPlaybackEnded = onPlaybackEnded,
                 onPlaybackError = onPlaybackError,
                 onPlaybackControllerStateChanged = { },
                 onPlaybackControllerActionsChanged = { }

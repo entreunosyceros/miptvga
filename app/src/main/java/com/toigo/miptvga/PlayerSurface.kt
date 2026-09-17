@@ -100,6 +100,7 @@ internal fun PlayerSurface(
     onToggleFullscreen: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit,
     onPlaybackError: (String?) -> Unit,
     onPlaybackControllerStateChanged: (PlaybackControllerState) -> Unit,
     onPlaybackControllerActionsChanged: (PlaybackControllerActions) -> Unit
@@ -116,6 +117,7 @@ internal fun PlayerSurface(
             onToggleFullscreen = onToggleFullscreen,
             onReconnectScheduled = onReconnectScheduled,
             onPlaybackStarted = onPlaybackStarted,
+            onPlaybackEnded = onPlaybackEnded,
             onPlaybackError = onPlaybackError,
             onPlaybackControllerStateChanged = onPlaybackControllerStateChanged,
             onPlaybackControllerActionsChanged = onPlaybackControllerActionsChanged
@@ -132,6 +134,7 @@ internal fun PlayerSurface(
             onToggleFullscreen = onToggleFullscreen,
             onReconnectScheduled = onReconnectScheduled,
             onPlaybackStarted = onPlaybackStarted,
+            onPlaybackEnded = onPlaybackEnded,
             onPlaybackError = onPlaybackError,
             onPlaybackControllerStateChanged = onPlaybackControllerStateChanged,
             onPlaybackControllerActionsChanged = onPlaybackControllerActionsChanged
@@ -152,6 +155,7 @@ private fun VlcPlayerSurface(
     onToggleFullscreen: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit,
     onPlaybackError: (String?) -> Unit,
     onPlaybackControllerStateChanged: (PlaybackControllerState) -> Unit,
     onPlaybackControllerActionsChanged: (PlaybackControllerActions) -> Unit
@@ -163,6 +167,7 @@ private fun VlcPlayerSurface(
     val currentOnToggleFullscreen = rememberUpdatedState(onToggleFullscreen)
     val currentOnReconnectScheduled = rememberUpdatedState(onReconnectScheduled)
     val currentOnPlaybackStarted = rememberUpdatedState(onPlaybackStarted)
+    val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
     val currentOnPlaybackError = rememberUpdatedState(onPlaybackError)
     val currentOnPlaybackControllerStateChanged = rememberUpdatedState(onPlaybackControllerStateChanged)
     val currentOnPlaybackControllerActionsChanged = rememberUpdatedState(onPlaybackControllerActionsChanged)
@@ -279,7 +284,7 @@ private fun VlcPlayerSurface(
                             currentOnReconnectScheduled.value()
                         }
                     } else {
-                        currentOnPlaybackError.value("La emisión ha finalizado")
+                        currentOnPlaybackEnded.value()
                     }
                 }
 
@@ -514,6 +519,7 @@ private fun ExoPlayerSurface(
     onToggleFullscreen: () -> Unit,
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit,
     onPlaybackError: (String?) -> Unit,
     onPlaybackControllerStateChanged: (PlaybackControllerState) -> Unit,
     onPlaybackControllerActionsChanged: (PlaybackControllerActions) -> Unit
@@ -525,6 +531,7 @@ private fun ExoPlayerSurface(
     val currentOnToggleFullscreen = rememberUpdatedState(onToggleFullscreen)
     val currentOnReconnectScheduled = rememberUpdatedState(onReconnectScheduled)
     val currentOnPlaybackStarted = rememberUpdatedState(onPlaybackStarted)
+    val currentOnPlaybackEnded = rememberUpdatedState(onPlaybackEnded)
     val currentOnPlaybackError = rememberUpdatedState(onPlaybackError)
     val currentOnPlaybackControllerStateChanged = rememberUpdatedState(onPlaybackControllerStateChanged)
     val currentOnPlaybackControllerActionsChanged = rememberUpdatedState(onPlaybackControllerActionsChanged)
@@ -637,19 +644,22 @@ private fun ExoPlayerSurface(
                     reconnectPending.value = false
                     fullscreenTransitionActive.value = false
                     currentOnPlaybackStarted.value()
-                } else if (
-                    playbackState == Player.STATE_ENDED &&
-                    shouldRecoverEndedPlayback(playbackUrlInfo) &&
-                    currentStreamUrl.value.isNotBlank() &&
-                    !reconnectPending.value
-                ) {
-                    if (fullscreenTransitionActive.value) {
-                        requestSoftReconnect()
+                } else if (playbackState == Player.STATE_ENDED) {
+                    val shouldReconnect =
+                        shouldRecoverEndedPlayback(playbackUrlInfo) &&
+                            currentStreamUrl.value.isNotBlank() &&
+                            !reconnectPending.value
+                    if (shouldReconnect) {
+                        if (fullscreenTransitionActive.value) {
+                            requestSoftReconnect()
+                        } else {
+                            reconnectPending.value = true
+                            reconnectAttempt.intValue += 1
+                            reconnectToken.intValue += 1
+                            currentOnReconnectScheduled.value()
+                        }
                     } else {
-                        reconnectPending.value = true
-                        reconnectAttempt.intValue += 1
-                        reconnectToken.intValue += 1
-                        currentOnReconnectScheduled.value()
+                        currentOnPlaybackEnded.value()
                     }
                 }
             }

@@ -11,6 +11,8 @@ private const val KeySourceLabel = "source_label"
 private const val KeySelectedGroupId = "selected_group_id"
 private const val KeyFavoriteIds = "favorite_ids"
 private const val KeyFavoriteGroupIds = "favorite_group_ids"
+private const val KeyWatchedIds = "watched_ids"
+private const val MaxWatchedIds = 4_000
 private const val KeyVideoCompatibilityMode = "video_compatibility_mode"
 private const val KeyPlaybackBackend = "playback_backend"
 private const val KeyShowChannelLogos = "show_channel_logos"
@@ -61,6 +63,19 @@ internal class LastPlaylistStore(context: Context) {
 
     fun readFavoriteGroupIds(): Set<String> {
         return preferences.getStringSet(KeyFavoriteGroupIds, emptySet())?.toSet().orEmpty()
+    }
+
+    fun saveWatchedIds(watchedIds: Set<String>) {
+        val trimmed = if (watchedIds.size <= MaxWatchedIds) {
+            watchedIds
+        } else {
+            watchedIds.take(MaxWatchedIds).toSet()
+        }
+        preferences.edit { putStringSet(KeyWatchedIds, HashSet(trimmed)) }
+    }
+
+    fun readWatchedIds(): Set<String> {
+        return preferences.getStringSet(KeyWatchedIds, emptySet())?.toSet().orEmpty()
     }
 
     fun saveVideoCompatibilityMode(mode: VideoCompatibilityMode) {

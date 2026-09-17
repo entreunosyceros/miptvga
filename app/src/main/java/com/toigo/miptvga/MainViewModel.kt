@@ -41,6 +41,7 @@ internal class MainViewModel(
         UiState(
             favoriteIds = lastPlaylistStore.readFavoriteIds(),
             favoriteGroupIds = lastPlaylistStore.readFavoriteGroupIds(),
+            watchedIds = lastPlaylistStore.readWatchedIds(),
             epgSettings = initialEpgSettings,
             epgStatus = initialEpgSettings.statusLabel(),
             xtreamKeepAliveSettings = initialXtreamKeepAliveSettings,
@@ -53,6 +54,7 @@ internal class MainViewModel(
 
     private var indexedChannels: List<ChannelListEntry> = emptyList()
     private var channelsByGroupId: Map<String, List<ChannelListEntry>> = emptyMap()
+    private var continuousPlayOriginalIndices: List<Int> = emptyList()
     private var cachedGroups: List<ChannelGroup> = emptyList()
     private var filteredIndexByOriginalIndex: Map<Int, Int> = emptyMap()
     private var browserRootPaths: Set<String> = emptySet()
@@ -299,21 +301,142 @@ internal class MainViewModel(
         toggleFavoriteGroupById(selectedEntry.groupId, selectedEntry.groupTitle)
     }
 
-    fun selectChannel(index: Int) {
+    fun selectChannel(index: Int, keepContinuousPlay: Boolean = false) {
         if (index !in _uiState.value.channels.indices) return
-        if (_uiState.value.selectedIndex == index && _uiState.value.controlsVisible) return
-        val channel = _uiState.value.channels[index]
+        if (
+            _uiState.value.selectedIndex == index &&
+            _uiState.value.controlsVisible &&
+            !keepContinuousPlay
+        ) {
+            return
+        }
+
         // Drop the previous Xtream keep-alive immediately so the panel frees the slot
         // before the player opens the next stream.
         stopXtreamKeepAlive()
+
+        if (!keepContinuousPlay) {
+            clearContinuousPlay(updateState = false)
+        }
+
+        val channel = _uiState.value.channels[index]
+        val continuousActive = keepContinuousPlay && continuousPlayOriginalIndices.isNotEmpty()
+        val remaining = if (continuousActive) continuousPlayRemainingFrom(index) else 0
         _uiState.value = _uiState.value.copy(
             selectedIndex = index,
             selectedVisibleIndex = filteredIndexByOriginalIndex[index] ?: -1,
             controlsVisible = true,
             status = "Abriendo: ${channel.name}",
-            playbackMessage = "Abriendo canal…",
-            playbackMessageIsError = false
+            playbackMessage = if (continuousActive) {
+                "Lista continua · quedan $remaining"
+            } else {
+                "Abriendo canal…"
+            },
+            playbackMessageIsError = false,
+            continuousPlayActive = continuousActive,
+            continuousPlayRemaining = remaining
         )
+    }
+
+    fun playContinuousFrom(originalIndex: Int) {
+        if (originalIndex !in _uiState.value.channels.indices) return
+        val filtered = _uiState.value.filteredChannels
+        val startVisible = filtered.indexOfFirst { it.originalIndex == originalIndex }
+        continuousPlayOriginalIndices = if (startVisible >= 0) {
+            filtered.drop(startVisible).map { it.originalIndex }
+        } else {
+            listOf(originalIndex)
+        }
+        selectChannel(originalIndex, keepContinuousPlay = true)
+        val remaining = continuousPlayOriginalIndices.size
+        _uiState.value = _uiState.value.copy(
+            continuousPlayActive = true,
+            continuousPlayRemaining = remaining,
+            playbackMessage = "Reproduciendo lista desde aquí · $remaining vídeos",
+            playbackMessageIsError = false,
+            controlsVisible = true
+        )
+    }
+
+    fun stopContinuousPlay() {
+        clearContinuousPlay(updateState = true)
+        _uiState.value = _uiState.value.copy(
+            playbackMessage = "Lista continua detenida",
+            playbackMessageIsError = false,
+            controlsVisible = true
+        )
+    }
+
+    fun toggleWatched(index: Int) {
+        val channel = _uiState.value.channels.getOrNull(index) ?: return
+        val watchedId = favoriteIdForChannel(channel)
+        val current = _uiState.value.watchedIds
+        val updated = if (watchedId in current) current - watchedId else current + watchedId
+        lastPlaylistStore.saveWatchedIds(updated)
+        _uiState.value = _uiState.value.copy(
+            watchedIds = updated,
+            playbackMessage = if (watchedId in current) "Marcado como no visto" else "Marcado como visto",
+            playbackMessageIsError = false,
+            controlsVisible = true
+        )
+    }
+
+    fun markWatched(index: Int) {
+        val channel = _uiState.value.channels.getOrNull(index) ?: return
+        val watchedId = favoriteIdForChannel(channel)
+        if (watchedId in _uiState.value.watchedIds) return
+        val updated = _uiState.value.watchedIds + watchedId
+        lastPlaylistStore.saveWatchedIds(updated)
+        _uiState.value = _uiState.value.copy(watchedIds = updated)
+    }
+
+    fun onPlaybackEnded(channelName: String) {
+        val finishedIndex = _uiState.value.selectedIndex
+        if (finishedIndex >= 0) {
+            markWatched(finishedIndex)
+        }
+
+        val queue = continuousPlayOriginalIndices
+        val positionInQueue = queue.indexOf(finishedIndex)
+        val nextIndex = if (positionInQueue >= 0) queue.getOrNull(positionInQueue + 1) else null
+
+        if (nextIndex != null) {
+            selectChannel(nextIndex, keepContinuousPlay = true)
+            return
+        }
+
+        clearContinuousPlay(updateState = false)
+        _uiState.value = _uiState.value.copy(
+            status = "Finalizado: $channelName",
+            playbackMessage = if (queue.isNotEmpty()) {
+                "Lista continua finalizada"
+            } else {
+                "Vídeo finalizado"
+            },
+            playbackMessageIsError = false,
+            controlsVisible = true,
+            continuousPlayActive = false,
+            continuousPlayRemaining = 0
+        )
+    }
+
+    private fun clearContinuousPlay(updateState: Boolean) {
+        continuousPlayOriginalIndices = emptyList()
+        if (updateState) {
+            _uiState.value = _uiState.value.copy(
+                continuousPlayActive = false,
+                continuousPlayRemaining = 0
+            )
+        }
+    }
+
+    private fun continuousPlayRemainingFrom(currentOriginalIndex: Int): Int {
+        val position = continuousPlayOriginalIndices.indexOf(currentOriginalIndex)
+        return if (position >= 0) {
+            continuousPlayOriginalIndices.size - position
+        } else {
+            continuousPlayOriginalIndices.size
+        }
     }
 
     fun showControls(show: Boolean) {
@@ -848,6 +971,7 @@ internal class MainViewModel(
         cachedGroups = prepared.groups
         filteredIndexByOriginalIndex = emptyMap()
         filteredIndexByOriginalIndex = prepared.filterResult.indexByOriginalIndex
+        continuousPlayOriginalIndices = emptyList()
         lastPlaylistStore.saveSource(source)
         lastPlaylistStore.saveSelectedGroupId(prepared.resolvedGroupId)
 
@@ -862,6 +986,8 @@ internal class MainViewModel(
             status = "$messagePrefix: ${channels.size} canales",
             playbackMessage = if (channels.isNotEmpty()) "Lista lista · selecciona un canal" else null,
             playbackMessageIsError = false,
+            continuousPlayActive = false,
+            continuousPlayRemaining = 0,
             currentPrograms = if (channels.isEmpty()) emptyMap() else _uiState.value.currentPrograms,
             nextPrograms = if (channels.isEmpty()) emptyMap() else _uiState.value.nextPrograms,
             isLoading = false,
@@ -1134,6 +1260,7 @@ internal class MainViewModel(
         channelsByGroupId = emptyMap()
         cachedGroups = emptyList()
         filteredIndexByOriginalIndex = emptyMap()
+        continuousPlayOriginalIndices = emptyList()
         epgTimelinesByKey = emptyMap()
         stopXtreamKeepAlive()
         epgRefreshJob?.cancel()
