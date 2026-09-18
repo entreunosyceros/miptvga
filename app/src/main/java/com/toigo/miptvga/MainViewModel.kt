@@ -1062,19 +1062,21 @@ internal class MainViewModel(
         filterJob = viewModelScope.launch {
             if (!immediate) delay(SearchDebounceMillis)
 
-            val filterResult = withContext(Dispatchers.Default) {
-                computeFilterResult(
-                    entries = indexedChannels,
-                    channelsByGroupId = channelsByGroupId,
-                    selectedGroupId = selectedGroupIdSnapshot,
-                    searchQuery = querySnapshot,
-                    favoriteIds = favoriteIdsSnapshot,
-                    favoriteGroupIds = favoriteGroupIdsSnapshot,
-                    selectedIndex = selectedIndexSnapshot,
-                    groups = cachedGroups,
-                    preservePlaybackSelection = true
-                )
-            }
+            val filterResult = runCatching {
+                withContext(Dispatchers.Default) {
+                    computeFilterResult(
+                        entries = indexedChannels,
+                        channelsByGroupId = channelsByGroupId,
+                        selectedGroupId = selectedGroupIdSnapshot,
+                        searchQuery = querySnapshot,
+                        favoriteIds = favoriteIdsSnapshot,
+                        favoriteGroupIds = favoriteGroupIdsSnapshot,
+                        selectedIndex = selectedIndexSnapshot,
+                        groups = cachedGroups,
+                        preservePlaybackSelection = true
+                    )
+                }
+            }.getOrElse { return@launch }
 
             val latestState = _uiState.value
             val latestQuery = latestState.searchQuery.trim()

@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -46,6 +47,7 @@ import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.flow.first
 
 private const val LiveReconnectInitialDelayMillis = 2_000L
 private const val LiveReconnectMaxDelayMillis = 30_000L
@@ -55,33 +57,36 @@ private const val MaxDecoderReconnectAttempts = 3
 private const val MaxNonLiveReconnectAttempts = 3
 private const val MaxXtreamReconnectAttempts = 12
 private const val PointerMoveThresholdPx = 2f
-private const val ExoMinBufferMs = 20_000
-private const val ExoMaxBufferMs = 60_000
-private const val ExoBufferForPlaybackMs = 2_000
-private const val ExoBufferForPlaybackAfterRebufferMs = 5_000
-private const val ExoLiveMinBufferMs = 15_000
-private const val ExoLiveMaxBufferMs = 45_000
-private const val ExoLiveBufferForPlaybackMs = 1_500
-private const val ExoLiveBufferForPlaybackAfterRebufferMs = 3_000
-private const val ExoVodMinBufferMs = 30_000
-private const val ExoVodMaxBufferMs = 120_000
-private const val ExoVodBufferForPlaybackMs = 3_000
-private const val ExoVodBufferForPlaybackAfterRebufferMs = 7_000
+private const val ExoMinBufferMs = 25_000
+private const val ExoMaxBufferMs = 70_000
+private const val ExoBufferForPlaybackMs = 2_500
+private const val ExoBufferForPlaybackAfterRebufferMs = 6_000
+private const val ExoLiveMinBufferMs = 20_000
+private const val ExoLiveMaxBufferMs = 55_000
+private const val ExoLiveBufferForPlaybackMs = 3_000
+private const val ExoLiveBufferForPlaybackAfterRebufferMs = 6_000
+private const val ExoVodMinBufferMs = 35_000
+private const val ExoVodMaxBufferMs = 140_000
+private const val ExoVodBufferForPlaybackMs = 3_500
+private const val ExoVodBufferForPlaybackAfterRebufferMs = 8_000
 private const val ExoLiveTargetOffsetMs = 4_000L
 private const val ExoLiveMinPlaybackSpeed = 0.97f
 private const val ExoLiveMaxPlaybackSpeed = 1.03f
-private const val VlcNetworkCachingMs = 6_000
-private const val VlcLiveCachingMs = 4_000
-private const val VlcFileCachingMs = 1_500
-private const val VlcXtreamNetworkCachingMs = 8_000
-private const val VlcXtreamLiveCachingMs = 5_000
+private const val VlcNetworkCachingMs = 15_000
+private const val VlcLiveCachingMs = 10_000
+private const val VlcFileCachingMs = 6_000
+private const val VlcXtreamNetworkCachingMs = 18_000
+private const val VlcXtreamLiveCachingMs = 12_000
+private const val VlcVodFileCachingMs = 10_000
 private const val PlaybackSeekStepMillis = 10_000L
 private const val PlaybackStatePollingMillis = 500L
 private const val FullscreenTransitionGuardMillis = 1_100L
 /** Give IPTV panels time to free the previous client slot before opening the next stream. */
-private const val ChannelSwitchTeardownMillis = 450L
-private const val ChannelSwitchTeardownXtreamMillis = 700L
+private const val ChannelSwitchTeardownMillis = 350L
+private const val ChannelSwitchTeardownXtreamMillis = 500L
 private const val FullscreenTransitionRecoveryCheckMillis = 900L
+/** Ignore spurious EndReached storms that look like buffering pauses. */
+private const val MinLiveEndReconnectIntervalMillis = 8_000L
 private val ProgressiveVodExtensions = setOf(
     ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".aac", ".flac", ".wav", ".m4a", ".webm", ".ogg"
 )
@@ -180,7 +185,9 @@ private fun VlcPlayerSurface(
     val reconnectToken = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
     val reconnectPending = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
     val fullscreenTransitionActive = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
-    val surfaceReady = remember(streamUrl, requestHeaders, videoCompatibilityMode) { mutableStateOf(false) }
+    // Do not key on streamUrl/headers: recomposition was resetting the surface and restarting playback.
+    val surfaceReady = remember(videoCompatibilityMode) { mutableStateOf(false) }
+    val lastLiveEndReconnectAtMs = remember(streamUrl) { mutableStateOf(0L) }
     val pointerTracker = remember(streamUrl, requestHeaders) { PointerActivityTracker() }
     val playbackStateSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerState()) }
     val playbackActionSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerActions()) }
@@ -211,14 +218,16 @@ private fun VlcPlayerSurface(
         }
     }
 
-    // Fresh MediaPlayer per stream so the previous TCP/HTTP session is fully released on zapping.
-    val mediaPlayer = remember(libVlc, streamUrl, requestHeaders) {
+    // Reuse one MediaPlayer: recreating it every zap caused decoder/surface thrash and buffering.
+    // Connection close is handled by stop + media=null before opening the next URL.
+    val mediaPlayer = remember(libVlc) {
         MediaPlayer(libVlc).apply {
             setVideoTrackEnabled(true)
         }
     }
+    val stableRequestHeaders = remember(streamUrl) { requestHeaders.toMap() }
 
-    LaunchedEffect(fullscreenTransitionToken, streamUrl, requestHeaders) {
+    LaunchedEffect(fullscreenTransitionToken, streamUrl, stableRequestHeaders) {
         if (fullscreenTransitionToken <= 0 || currentStreamUrl.value.isBlank()) return@LaunchedEffect
 
         fullscreenTransitionActive.value = true
@@ -281,10 +290,16 @@ private fun VlcPlayerSurface(
                             currentStreamUrl.value.isNotBlank() &&
                             !reconnectPending.value
 
-                    // Always drop the active session first so the panel frees the slot.
-                    releaseVlcPlaybackSession(mediaPlayer)
-
                     if (shouldReconnect) {
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val elapsed = now - lastLiveEndReconnectAtMs.value
+                        if (elapsed in 1 until MinLiveEndReconnectIntervalMillis) {
+                            // Spurious EndReached while the stream is still recovering: keep session.
+                            return@EventListener
+                        }
+                        lastLiveEndReconnectAtMs.value = now
+                        // Drop the slot, then reopen. Debounced so stalls don't look like buffering loops.
+                        releaseVlcPlaybackSession(mediaPlayer)
                         if (fullscreenTransitionActive.value) {
                             requestSoftReconnect()
                         } else {
@@ -294,6 +309,7 @@ private fun VlcPlayerSurface(
                             currentOnReconnectScheduled.value()
                         }
                     } else {
+                        releaseVlcPlaybackSession(mediaPlayer)
                         currentOnPlaybackEnded.value()
                     }
                 }
@@ -390,13 +406,16 @@ private fun VlcPlayerSurface(
         }
     }
 
-    LaunchedEffect(mediaPlayer, streamUrl, requestHeaders, reconnectToken.intValue, surfaceReady.value) {
+    LaunchedEffect(mediaPlayer, streamUrl, stableRequestHeaders, reconnectToken.intValue) {
         val sanitizedUrl = streamUrl.trim()
         if (sanitizedUrl.isBlank()) {
             releaseVlcPlaybackSession(mediaPlayer)
             return@LaunchedEffect
         }
-        if (!surfaceReady.value) return@LaunchedEffect
+
+        // Wait for the video surface without putting surfaceReady in the effect keys
+        // (that was restarting playback and looked like buffering every few seconds).
+        snapshotFlow { surfaceReady.value }.first { it }
 
         val shouldDelayReconnect = reconnectPending.value && reconnectAttempt.intValue > 0
         if (shouldDelayReconnect) {
@@ -408,9 +427,11 @@ private fun VlcPlayerSurface(
             )
         }
 
-        // Close any leftover session before opening the next channel/video.
+        // Close previous HTTP/TS session, then open the new URL.
         releaseVlcPlaybackSession(mediaPlayer)
-        kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
+        if (!shouldDelayReconnect) {
+            kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
+        }
 
         runCatching {
             reconnectPending.value = false
@@ -420,7 +441,7 @@ private fun VlcPlayerSurface(
                 addOption(":network-caching=$VlcNetworkCachingMs")
                 addOption(":live-caching=$VlcLiveCachingMs")
                 addOption(":file-caching=$VlcFileCachingMs")
-                addVlcHeaderOptions(requestHeaders)
+                addVlcHeaderOptions(stableRequestHeaders)
                 addPlaybackSpecificOptions(sanitizedUrl)
             }
             mediaPlayer.media = media
@@ -451,7 +472,7 @@ private fun VlcPlayerSurface(
         }
     }
 
-    key(videoCompatibilityMode, mediaPlayer) {
+    key(videoCompatibilityMode) {
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
@@ -546,6 +567,7 @@ private fun ExoPlayerSurface(
     val reconnectToken = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
     val reconnectPending = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
     val fullscreenTransitionActive = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
+    val lastLiveEndReconnectAtMs = remember(streamUrl) { mutableStateOf(0L) }
     val pointerTracker = remember(streamUrl, requestHeaders) { PointerActivityTracker() }
     val playbackStateSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerState()) }
     val playbackActionSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerActions()) }
@@ -557,6 +579,7 @@ private fun ExoPlayerSurface(
     }
     val usePlaybackCache = remember(streamUrl) { shouldUsePlaybackCache(streamUrl) }
     val effectiveRequestHeaders = remember(requestHeaders) { ensureIptvHeaders(requestHeaders) }
+    val stableRequestHeaders = remember(streamUrl) { effectiveRequestHeaders }
     // Keep one ExoPlayer instance across zapping. Recreating per URL briefly overlaps
     // two network sessions and trips single-connection IPTV panels.
     val exoPlayer = remember(applicationContext) {
@@ -565,16 +588,7 @@ private fun ExoPlayerSurface(
                 DefaultRenderersFactory(applicationContext)
                     .setEnableDecoderFallback(true)
             )
-            .setLoadControl(
-                DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(
-                        ExoLiveMinBufferMs,
-                        ExoLiveMaxBufferMs,
-                        ExoLiveBufferForPlaybackMs,
-                        ExoLiveBufferForPlaybackAfterRebufferMs
-                    )
-                    .build()
-            )
+            .setLoadControl(createExoLoadControl())
             .build().apply {
                 setAudioAttributes(playerAudioAttributes, true)
                 setWakeMode(C.WAKE_MODE_NETWORK)
@@ -590,7 +604,7 @@ private fun ExoPlayerSurface(
         reconnectToken.intValue += 1
     }
 
-    LaunchedEffect(fullscreenTransitionToken, streamUrl, requestHeaders) {
+    LaunchedEffect(fullscreenTransitionToken, streamUrl, stableRequestHeaders) {
         if (fullscreenTransitionToken <= 0 || currentStreamUrl.value.isBlank()) return@LaunchedEffect
 
         fullscreenTransitionActive.value = true
@@ -651,13 +665,18 @@ private fun ExoPlayerSurface(
                         shouldRecoverEndedPlayback(playbackUrlInfo) &&
                             currentStreamUrl.value.isNotBlank() &&
                             !reconnectPending.value
-                    // Close the network session before advancing / ending.
-                    runCatching {
-                        exoPlayer.playWhenReady = false
-                        exoPlayer.stop()
-                        exoPlayer.clearMediaItems()
-                    }
                     if (shouldReconnect) {
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val elapsed = now - lastLiveEndReconnectAtMs.value
+                        if (elapsed in 1 until MinLiveEndReconnectIntervalMillis) {
+                            return
+                        }
+                        lastLiveEndReconnectAtMs.value = now
+                        runCatching {
+                            exoPlayer.playWhenReady = false
+                            exoPlayer.stop()
+                            exoPlayer.clearMediaItems()
+                        }
                         if (fullscreenTransitionActive.value) {
                             requestSoftReconnect()
                         } else {
@@ -667,6 +686,11 @@ private fun ExoPlayerSurface(
                             currentOnReconnectScheduled.value()
                         }
                     } else {
+                        runCatching {
+                            exoPlayer.playWhenReady = false
+                            exoPlayer.stop()
+                            exoPlayer.clearMediaItems()
+                        }
                         currentOnPlaybackEnded.value()
                     }
                 }
@@ -766,7 +790,7 @@ private fun ExoPlayerSurface(
         }
     }
 
-    LaunchedEffect(exoPlayer, streamUrl, requestHeaders, reconnectToken.intValue) {
+    LaunchedEffect(exoPlayer, streamUrl, stableRequestHeaders, reconnectToken.intValue) {
         val sanitizedUrl = streamUrl.trim()
         if (sanitizedUrl.isBlank()) {
             exoPlayer.playWhenReady = false
@@ -792,13 +816,15 @@ private fun ExoPlayerSurface(
             exoPlayer.clearMediaItems()
         }
 
-        kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
+        if (!shouldDelayReconnect) {
+            kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
+        }
 
         runCatching {
             reconnectPending.value = false
             val dataSourceFactory = PlaybackCache.createDataSourceFactory(
                 context = applicationContext,
-                requestHeaders = effectiveRequestHeaders,
+                requestHeaders = stableRequestHeaders,
                 useCache = usePlaybackCache
             )
             val mediaSource = DefaultMediaSourceFactory(dataSourceFactory)
@@ -1232,11 +1258,8 @@ private fun shouldRecoverEndedPlayback(urlInfo: PlaybackUrlInfo): Boolean {
     if (looksLikeVodStream(urlInfo) && !isXtreamLiveStreamUrl(urlInfo.trimmed)) return false
     if (isXtreamLiveStreamUrl(urlInfo.trimmed)) return true
     if (shouldApplyLivePlaybackHandling(urlInfo)) return true
-
-    return when (urlInfo.scheme) {
-        "http", "https", "rtsp", "rtmp", "udp" -> true
-        else -> false
-    }
+    // Generic remote files should advance/end, not reconnect (reconnect looked like buffering).
+    return false
 }
 
 private fun looksLikeVodStream(url: String): Boolean {
@@ -1310,8 +1333,10 @@ private fun Media.addPlaybackSpecificOptions(url: String) {
     val normalized = url.lowercase(Locale.ROOT)
     val isXtream = isXtreamStreamUrl(url)
     val isLive = isLikelyLiveStream(url) || isXtreamLiveStreamUrl(url)
+    val isVod = looksLikeVodStream(url)
     val networkCaching = if (isXtream) VlcXtreamNetworkCachingMs else VlcNetworkCachingMs
     val liveCaching = if (isXtream) VlcXtreamLiveCachingMs else VlcLiveCachingMs
+    val fileCaching = if (isVod) VlcVodFileCachingMs else VlcFileCachingMs
     when {
         normalized.startsWith("rtsp://") -> {
             addOption(":rtsp-tcp")
@@ -1324,7 +1349,7 @@ private fun Media.addPlaybackSpecificOptions(url: String) {
             if (isLive) {
                 addOption(":live-caching=$liveCaching")
             } else {
-                addOption(":file-caching=$VlcFileCachingMs")
+                addOption(":file-caching=$fileCaching")
             }
         }
         normalized.contains("output=ts") || normalized.endsWith(".ts") || normalized.contains(".ts?") -> {
@@ -1337,7 +1362,11 @@ private fun Media.addPlaybackSpecificOptions(url: String) {
             addOption(":live-caching=$liveCaching")
             addOption(":http-reconnect")
         }
-        else -> addOption(":input-repeat=0")
+        else -> {
+            addOption(":network-caching=$networkCaching")
+            addOption(":file-caching=$fileCaching")
+            addOption(":input-repeat=0")
+        }
     }
 }
 

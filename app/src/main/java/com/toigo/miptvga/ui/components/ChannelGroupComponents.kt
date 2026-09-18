@@ -111,7 +111,8 @@ internal fun GroupRow(
 
     LaunchedEffect(requestInitialFocus) {
         if (requestInitialFocus) {
-            focusRequester.requestFocus()
+            kotlinx.coroutines.yield()
+            runCatching { focusRequester.requestFocus() }
         }
     }
 
@@ -212,7 +213,7 @@ internal fun ChannelList(
     if (filteredChannels.isEmpty()) {
         Box(
             modifier = modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .clip(ItemShape)
                 .background(ChannelRowColor)
                 .border(1.dp, PanelBorderColor, ItemShape),
@@ -231,19 +232,19 @@ internal fun ChannelList(
     val listState = rememberLazyListState()
 
     LaunchedEffect(selectedVisibleIndex, filteredChannels.size) {
-        if (selectedVisibleIndex < 0 || filteredChannels.isEmpty()) return@LaunchedEffect
+        if (selectedVisibleIndex !in filteredChannels.indices) return@LaunchedEffect
 
         val visibleItems = listState.layoutInfo.visibleItemsInfo
         val isAlreadyVisible = visibleItems.any { it.index == selectedVisibleIndex }
         if (!isAlreadyVisible) {
-            listState.scrollToItem(selectedVisibleIndex)
+            runCatching { listState.scrollToItem(selectedVisibleIndex) }
         }
     }
 
     LazyColumn(
         state = listState,
         verticalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = modifier.fillMaxSize()
+        modifier = modifier.fillMaxWidth()
     ) {
         items(
             items = filteredChannels,
@@ -294,7 +295,8 @@ internal fun ChannelRow(
 
     LaunchedEffect(focusRequestToken, requestInitialFocus) {
         if (focusRequestToken > 0 && requestInitialFocus) {
-            focusRequester.requestFocus()
+            kotlinx.coroutines.yield()
+            runCatching { focusRequester.requestFocus() }
         }
     }
 

@@ -91,7 +91,9 @@ internal fun SearchScreen(
             }
 
             ChannelList(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 filteredChannels = ui.filteredChannels,
                 favoriteIds = ui.favoriteIds,
                 favoriteGroupIds = ui.favoriteGroupIds,

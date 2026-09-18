@@ -795,7 +795,11 @@ private fun SearchScreen(
             }
 
             ChannelList(
-                modifier = Modifier.fillMaxSize(),
+                // weight(1f) is required inside AppPanel's Column; fillMaxSize alone
+                // measures LazyColumn with infinite height and crashes the activity.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 filteredChannels = ui.filteredChannels,
                 favoriteIds = ui.favoriteIds,
                 favoriteGroupIds = ui.favoriteGroupIds,
@@ -804,7 +808,6 @@ private fun SearchScreen(
                 showChannelLogos = ui.showChannelLogos,
                 selectedIndex = ui.selectedIndex,
                 selectedVisibleIndex = ui.selectedVisibleIndex,
-                listResetKey = ui.searchQuery,
                 continuousPlayActive = ui.continuousPlayActive,
                 onToggleFavorite = vm::toggleFavorite,
                 onToggleWatched = vm::toggleWatched,
@@ -2919,7 +2922,7 @@ private fun ChannelList(
     if (filteredChannels.isEmpty()) {
         Box(
             modifier = modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .clip(ItemShape)
                 .background(ChannelRowColor)
                 .border(1.dp, PanelBorderColor, ItemShape),
@@ -2944,17 +2947,18 @@ private fun ChannelList(
             selectedVisibleIndex in filteredChannels.indices -> selectedVisibleIndex
             else -> 0
         }
+        if (targetIndex !in filteredChannels.indices) return@LaunchedEffect
         val visibleItems = listState.layoutInfo.visibleItemsInfo
         val isAlreadyVisible = visibleItems.any { it.index == targetIndex }
         if (!isAlreadyVisible) {
-            listState.scrollToItem(targetIndex)
+            runCatching { listState.scrollToItem(targetIndex) }
         }
     }
 
     LazyColumn(
         state = listState,
         verticalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = modifier.fillMaxSize()
+        modifier = modifier.fillMaxWidth()
     ) {
         items(
             items = filteredChannels,
