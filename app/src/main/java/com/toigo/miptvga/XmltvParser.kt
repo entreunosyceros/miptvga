@@ -4,6 +4,7 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.Reader
 import java.text.SimpleDateFormat
+import java.text.ParsePosition
 import java.util.Locale
 import java.util.TimeZone
 
@@ -18,7 +19,8 @@ internal class XmltvParser {
     fun parseProgramTimelines(
         reader: Reader,
         interests: EpgChannelInterests,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        checkCancelled: () -> Unit = {}
     ): Map<String, List<CurrentProgram>> {
         if (interests.ids.isEmpty() && interests.names.isEmpty()) return emptyMap()
 
@@ -32,16 +34,18 @@ internal class XmltvParser {
 
         var eventType = parser.eventType
         while (eventType != XmlPullParser.END_DOCUMENT) {
+            checkCancelled()
             if (eventType == XmlPullParser.START_TAG) {
                 when (parser.name) {
-                    ChannelTag -> parseChannel(parser, interests, matchedKeysByXmlChannelId)
+                    ChannelTag -> parseChannel(parser, interests, matchedKeysByXmlChannelId, checkCancelled)
                     ProgrammeTag -> parseProgramme(
                         parser = parser,
                         interests = interests,
                         matchedKeysByXmlChannelId = matchedKeysByXmlChannelId,
                         timelines = timelines,
                         minimumStopTime = minimumStopTime,
-                        maximumStartTime = maximumStartTime
+                        maximumStartTime = maximumStartTime,
+                        checkCancelled = checkCancelled
                     )
                 }
             }
@@ -49,6 +53,7 @@ internal class XmltvParser {
         }
 
         return timelines.mapValues { (_, programs) ->
+            checkCancelled()
             programs.sortedBy { it.startTimeMillis }
         }
     }
@@ -56,7 +61,8 @@ internal class XmltvParser {
     private fun parseChannel(
         parser: XmlPullParser,
         interests: EpgChannelInterests,
-        matchedKeysByXmlChannelId: MutableMap<String, MutableSet<String>>
+        matchedKeysByXmlChannelId: MutableMap<String, MutableSet<String>>,
+        checkCancelled: () -> Unit
     ) {
         val xmlChannelId = parser.getAttributeValue(null, "id")?.trim().orEmpty()
         if (xmlChannelId.isBlank()) return
@@ -69,7 +75,9 @@ internal class XmltvParser {
 
         val startDepth = parser.depth
         while (!(parser.eventType == XmlPullParser.END_TAG && parser.depth == startDepth && parser.name == ChannelTag)) {
+            checkCancelled()
             val nextEvent = parser.next()
+            check(nextEvent != XmlPullParser.END_DOCUMENT) { "XMLTV incompleto" }
             if (nextEvent == XmlPullParser.START_TAG && parser.name == DisplayNameTag) {
                 val displayName = parser.nextText().normalizeEpgLookupKey()
                 if (displayName in interests.names) {
@@ -89,7 +97,8 @@ internal class XmltvParser {
         matchedKeysByXmlChannelId: Map<String, Set<String>>,
         timelines: MutableMap<String, MutableList<CurrentProgram>>,
         minimumStopTime: Long,
-        maximumStartTime: Long
+        maximumStartTime: Long,
+        checkCancelled: () -> Unit
     ) {
         val xmlChannelId = parser.getAttributeValue(null, "channel")?.trim().orEmpty()
         val startTime = parseXmltvDateTime(parser.getAttributeValue(null, "start")) ?: return
@@ -103,7 +112,9 @@ internal class XmltvParser {
         var title = ""
         val startDepth = parser.depth
         while (!(parser.eventType == XmlPullParser.END_TAG && parser.depth == startDepth && parser.name == ProgrammeTag)) {
+            checkCancelled()
             val nextEvent = parser.next()
+            check(nextEvent != XmlPullParser.END_DOCUMENT) { "XMLTV incompleto" }
             if (nextEvent == XmlPullParser.START_TAG && parser.name == TitleTag && title.isBlank()) {
                 title = parser.nextText().trim()
             }
@@ -134,23 +145,22 @@ internal class XmltvParser {
         if (trimmed.length < 14) return null
 
         val datePart = trimmed.take(14)
-        val offsetPart = trimmed.substring(14).trim()
-            .split(' ')
-            .firstOrNull()
-            ?.takeIf { it.startsWith("+") || it.startsWith("-") }
-
-        return runCatching {
-            if (offsetPart != null) {
-                SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US).apply {
-                    isLenient = false
-                }.parse("$datePart ${offsetPart.toZoneOffsetFormat()}")!!.time
-            } else {
-                SimpleDateFormat("yyyyMMddHHmmss", Locale.US).apply {
-                    isLenient = false
-                    timeZone = TimeZone.getDefault()
-                }.parse(datePart)!!.time
-            }
-        }.getOrNull()
+        if (!datePart.all(Char::isDigit)) return null
+        val offset = trimmed.substring(14).trim()
+        // XMLTV defines UTC when the zone is absent. Accept the common ISO colon
+        // extension as well, without converting RFC822 offsets into the wrong format.
+        val normalizedOffset = when {
+            offset.isEmpty() || offset == "Z" -> "+0000"
+            OffsetPattern.matches(offset) -> offset.replace(":", "")
+            else -> return null
+        }
+        val text = "$datePart $normalizedOffset"
+        val position = ParsePosition(0)
+        val format = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US).apply {
+            isLenient = false
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        return format.parse(text, position)?.takeIf { position.index == text.length }?.time
     }
 }
 
@@ -159,11 +169,5 @@ internal data class EpgChannelInterests(
     val names: Set<String>
 )
 
-private fun String.toZoneOffsetFormat(): String {
-    return if (length == 5 && this[3] != ':') {
-        substring(0, 3) + ":" + substring(3)
-    } else {
-        this
-    }
-}
+private val OffsetPattern = Regex("[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9]")
 

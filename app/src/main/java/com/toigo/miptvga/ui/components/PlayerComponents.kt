@@ -92,7 +92,7 @@ internal fun playbackTimelineLabel(state: PlaybackControllerState): String {
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun PlayerPanel(
     modifier: Modifier,
@@ -494,7 +494,7 @@ internal fun PlayerBottomControlsOverlay(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun FullscreenPlayerPanel(
     modifier: Modifier,

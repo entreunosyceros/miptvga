@@ -328,7 +328,7 @@ internal fun SettingsScreen(
     }
 }
 
-@androidx.media3.common.util.UnstableApi
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 internal fun MaintenanceSection(vm: MainViewModel) {
     val storageInfo by vm.storageInfo.collectAsStateWithLifecycle()

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#0d1117"/>
+<text x="30" y="43" font-family="sans-serif" font-size="27" font-weight="700" fill="#41d3b0">miptvga</text>
+<text x="205" y="42" font-family="sans-serif" font-size="17" font-weight="400" fill="#b6c2d1">TELEVISIÓN</text>
+<text x="1010" y="42" font-family="sans-serif" font-size="18" font-weight="400" fill="#e9edf3">18:30 · Viernes</text>
+<rect x="20" y="70" width="164" height="580" rx="8" fill="#151d29" stroke="none" stroke-width="1"/>
+<rect x="30" y="92" width="144" height="49" rx="8" fill="#243344" stroke="none" stroke-width="1"/>
+<text x="43" y="122" font-family="sans-serif" font-size="18" font-weight="600" fill="#41d3b0">Televisión</text>
+<text x="43" y="189" font-family="sans-serif" font-size="18" font-weight="600" fill="#b6c2d1">Favoritos</text>
+<text x="43" y="256" font-family="sans-serif" font-size="18" font-weight="600" fill="#b6c2d1">Grupos</text>
+<text x="43" y="323" font-family="sans-serif" font-size="18" font-weight="600" fill="#b6c2d1">Buscar</text>
+<text x="43" y="390" font-family="sans-serif" font-size="18" font-weight="600" fill="#b6c2d1">EPG</text>
+<text x="43" y="457" font-family="sans-serif" font-size="18" font-weight="600" fill="#b6c2d1">Fuentes</text>
+<text x="43" y="524" font-family="sans-serif" font-size="18" font-weight="600" fill="#b6c2d1">Ajustes</text>
+<rect x="202" y="70" width="284" height="580" rx="8" fill="#151d29" stroke="none" stroke-width="1"/>
+<text x="220" y="109" font-family="sans-serif" font-size="22" font-weight="600" fill="#e9edf3">Todos los canales</text>
+<text x="220" y="139" font-family="sans-serif" font-size="15" font-weight="400" fill="#b6c2d1">Noticias  ·  125 canales</text>
+<rect x="212" y="162" width="264" height="66" rx="8" fill="#1b2635" stroke="none" stroke-width="3"/>
+<text x="224" y="190" font-family="sans-serif" font-size="15" font-weight="400" fill="#41d3b0">001</text>
+<text x="267" y="190" font-family="sans-serif" font-size="18" font-weight="600" fill="#e9edf3">Noticias 24</text>
+<text x="267" y="213" font-family="sans-serif" font-size="12" font-weight="400" fill="#41d3b0">EN REPRODUCCIÓN</text>
+<rect x="212" y="237" width="264" height="66" rx="8" fill="#25394a" stroke="#41d3b0" stroke-width="3"/>
+<text x="224" y="265" font-family="sans-serif" font-size="15" font-weight="400" fill="#b6c2d1">002</text>
+<text x="267" y="265" font-family="sans-serif" font-size="18" font-weight="600" fill="#e9edf3">Canal Cultura</text>
+<text x="267" y="288" font-family="sans-serif" font-size="12" font-weight="400" fill="#aab9cd">Ahora · Programa de ejemplo</text>
+<rect x="212" y="312" width="264" height="66" rx="8" fill="#1b2635" stroke="none" stroke-width="3"/>
+<text x="224" y="340" font-family="sans-serif" font-size="15" font-weight="400" fill="#b6c2d1">003</text>
+<text x="267" y="340" font-family="sans-serif" font-size="18" font-weight="600" fill="#e9edf3">Deporte en directo</text>
+<text x="267" y="363" font-family="sans-serif" font-size="12" font-weight="400" fill="#aab9cd">SELECCIONADO · Sin reproducir</text>
+<rect x="469" y="320" width="4" height="50" rx="8" fill="#41d3b0" stroke="none" stroke-width="1"/>
+<rect x="212" y="387" width="264" height="66" rx="8" fill="#1b2635" stroke="none" stroke-width="3"/>
+<text x="224" y="415" font-family="sans-serif" font-size="15" font-weight="400" fill="#b6c2d1">004</text>
+<text x="267" y="415" font-family="sans-serif" font-size="18" font-weight="600" fill="#e9edf3">Documentales</text>
+<text x="267" y="438" font-family="sans-serif" font-size="12" font-weight="400" fill="#aab9cd">Ahora · Programa de ejemplo</text>
+<rect x="212" y="462" width="264" height="66" rx="8" fill="#1b2635" stroke="none" stroke-width="3"/>
+<text x="224" y="490" font-family="sans-serif" font-size="15" font-weight="400" fill="#b6c2d1">005</text>
+<text x="267" y="490" font-family="sans-serif" font-size="18" font-weight="600" fill="#e9edf3">Cine clásico</text>
+<text x="267" y="513" font-family="sans-serif" font-size="12" font-weight="400" fill="#aab9cd">Ahora · Programa de ejemplo</text>
+<rect x="212" y="537" width="264" height="66" rx="8" fill="#1b2635" stroke="none" stroke-width="3"/>
+<text x="224" y="565" font-family="sans-serif" font-size="15" font-weight="400" fill="#b6c2d1">006</text>
+<text x="267" y="565" font-family="sans-serif" font-size="18" font-weight="600" fill="#e9edf3">Música y conciertos</text>
+<text x="267" y="588" font-family="sans-serif" font-size="12" font-weight="400" fill="#aab9cd">Ahora · Programa de ejemplo</text>
+<rect x="505" y="70" width="640" height="360.0" rx="8" fill="#05080d" stroke="#344458" stroke-width="1"/>
+<text x="720.0" y="250.0" font-family="sans-serif" font-size="22" font-weight="400" fill="#8291a4">VÍDEO EN DIRECTO</text>
+<rect x="521" y="86" width="90" height="30" rx="8" fill="#41d3b0" stroke="none" stroke-width="1"/>
+<text x="532" y="108" font-family="sans-serif" font-size="14" font-weight="700" fill="#0d1117">EN VIVO</text>
+<text x="505" y="468.0" font-family="sans-serif" font-size="27" font-weight="700" fill="#e9edf3">001 · Noticias 24</text>
+<text x="505" y="503.0" font-family="sans-serif" font-size="20" font-weight="400" fill="#e9edf3">Ahora · La actualidad del día</text>
+<text x="505" y="532.0" font-family="sans-serif" font-size="16" font-weight="400" fill="#b6c2d1">18:00 — 19:00</text>
+<rect x="505" y="548.0" width="640" height="5" rx="8" fill="#2b3b4c" stroke="none" stroke-width="1"/>
+<rect x="505" y="548.0" width="320.0" height="5" rx="8" fill="#41d3b0" stroke="none" stroke-width="1"/>
+<text x="505" y="586.0" font-family="sans-serif" font-size="17" font-weight="400" fill="#b6c2d1">Después · Informativo de la tarde · 19:00</text>
+<rect x="505" y="608.0" width="230" height="48" rx="8" fill="#233344" stroke="#41d3b0" stroke-width="1"/>
+<text x="525" y="639.0" font-family="sans-serif" font-size="17" font-weight="400" fill="#e9edf3">OK · Pantalla completa</text>
+<text x="25" y="690" font-family="sans-serif" font-size="14" font-weight="400" fill="#8fa2b8">VARIANTE A · PROPUESTA ESTÁTICA</text>
+<text x="470" y="690" font-family="sans-serif" font-size="14" font-weight="400" fill="#b6c2d1">Borde = foco     Barra = selección     EN REPRODUCCIÓN = stream activo</text>
+</svg>

@@ -1,0 +1,175 @@
+Compiled from "LazyLayoutKeyIndexMap.kt"
+public final class androidx.compose.foundation.lazy.layout.NearestRangeKeyIndexMap implements androidx.compose.foundation.lazy.layout.LazyLayoutKeyIndexMap {
+  private final androidx.collection.ObjectIntMap<java.lang.Object> map;
+
+  private final java.lang.Object[] keys;
+
+  private final int keysStartIndex;
+
+  public static final int $stable;
+
+  public androidx.compose.foundation.lazy.layout.NearestRangeKeyIndexMap(kotlin.ranges.IntRange, androidx.compose.foundation.lazy.layout.LazyLayoutIntervalContent<?>);
+    Code:
+       0: aload_0
+       1: invokespecial #13                 // Method java/lang/Object."<init>":()V
+       4: nop
+       5: aload_2
+       6: invokevirtual #19                 // Method androidx/compose/foundation/lazy/layout/LazyLayoutIntervalContent.getIntervals:()Landroidx/compose/foundation/lazy/layout/IntervalList;
+       9: astore_3
+      10: aload_1
+      11: invokevirtual #25                 // Method kotlin/ranges/IntRange.getFirst:()I
+      14: istore        4
+      16: iload         4
+      18: iflt          25
+      21: iconst_1
+      22: goto          26
+      25: iconst_0
+      26: ifne          49
+      29: iconst_0
+      30: istore        6
+      32: ldc           #27                 // String negative nearestRange.first
+      34: astore        6
+      36: new           #29                 // class java/lang/IllegalStateException
+      39: dup
+      40: aload         6
+      42: invokevirtual #33                 // Method java/lang/Object.toString:()Ljava/lang/String;
+      45: invokespecial #36                 // Method java/lang/IllegalStateException."<init>":(Ljava/lang/String;)V
+      48: athrow
+      49: aload_1
+      50: invokevirtual #39                 // Method kotlin/ranges/IntRange.getLast:()I
+      53: aload_3
+      54: invokeinterface #44,  1           // InterfaceMethod androidx/compose/foundation/lazy/layout/IntervalList.getSize:()I
+      59: iconst_1
+      60: isub
+      61: invokestatic  #50                 // Method java/lang/Math.min:(II)I
+      64: istore        5
+      66: iload         5
+      68: iload         4
+      70: if_icmpge     99
+      73: aload_0
+      74: invokestatic  #56                 // Method androidx/collection/ObjectIntMapKt.emptyObjectIntMap:()Landroidx/collection/ObjectIntMap;
+      77: putfield      #60                 // Field map:Landroidx/collection/ObjectIntMap;
+      80: aload_0
+      81: iconst_0
+      82: istore        6
+      84: iconst_0
+      85: anewarray     #4                  // class java/lang/Object
+      88: putfield      #64                 // Field keys:[Ljava/lang/Object;
+      91: aload_0
+      92: iconst_0
+      93: putfield      #68                 // Field keysStartIndex:I
+      96: goto          182
+      99: iload         5
+     101: iload         4
+     103: isub
+     104: iconst_1
+     105: iadd
+     106: istore        6
+     108: aload_0
+     109: iload         6
+     111: anewarray     #4                  // class java/lang/Object
+     114: putfield      #64                 // Field keys:[Ljava/lang/Object;
+     117: aload_0
+     118: iload         4
+     120: putfield      #68                 // Field keysStartIndex:I
+     123: aload_0
+     124: new           #70                 // class androidx/collection/MutableObjectIntMap
+     127: dup
+     128: iload         6
+     130: invokespecial #73                 // Method androidx/collection/MutableObjectIntMap."<init>":(I)V
+     133: astore        7
+     135: aload         7
+     137: astore        8
+     139: astore        10
+     141: iconst_0
+     142: istore        9
+     144: aload_3
+     145: iload         4
+     147: iload         5
+     149: new           #75                 // class androidx/compose/foundation/lazy/layout/NearestRangeKeyIndexMap$2$1
+     152: dup
+     153: iload         4
+     155: iload         5
+     157: aload         8
+     159: aload_0
+     160: invokespecial #78                 // Method androidx/compose/foundation/lazy/layout/NearestRangeKeyIndexMap$2$1."<init>":(IILandroidx/collection/MutableObjectIntMap;Landroidx/compose/foundation/lazy/layout/NearestRangeKeyIndexMap;)V
+     163: checkcast     #80                 // class kotlin/jvm/functions/Function1
+     166: invokeinterface #84,  4           // InterfaceMethod androidx/compose/foundation/lazy/layout/IntervalList.forEach:(IILkotlin/jvm/functions/Function1;)V
+     171: nop
+     172: aload         10
+     174: aload         7
+     176: checkcast     #86                 // class androidx/collection/ObjectIntMap
+     179: putfield      #60                 // Field map:Landroidx/collection/ObjectIntMap;
+     182: nop
+     183: return
+
+  public int getIndex(java.lang.Object);
+    Code:
+       0: aload_0
+       1: getfield      #60                 // Field map:Landroidx/collection/ObjectIntMap;
+       4: astore_2
+       5: iconst_0
+       6: istore_3
+       7: aload_2
+       8: aload_1
+       9: invokevirtual #106                // Method androidx/collection/ObjectIntMap.findKeyIndex:(Ljava/lang/Object;)I
+      12: istore        4
+      14: iload         4
+      16: iflt          29
+      19: aload_2
+      20: getfield      #110                // Field androidx/collection/ObjectIntMap.values:[I
+      23: iload         4
+      25: iaload
+      26: goto          34
+      29: iconst_0
+      30: istore        5
+      32: iconst_m1
+      33: nop
+      34: ireturn
+
+  public java.lang.Object getKey(int);
+    Code:
+       0: aload_0
+       1: getfield      #64                 // Field keys:[Ljava/lang/Object;
+       4: astore_2
+       5: iload_1
+       6: aload_0
+       7: getfield      #68                 // Field keysStartIndex:I
+      10: isub
+      11: istore_3
+      12: iload_3
+      13: iflt          30
+      16: iload_3
+      17: aload_2
+      18: invokestatic  #125                // Method kotlin/collections/ArraysKt.getLastIndex:([Ljava/lang/Object;)I
+      21: if_icmpgt     30
+      24: aload_2
+      25: iload_3
+      26: aaload
+      27: goto          38
+      30: iload_3
+      31: istore        4
+      33: iconst_0
+      34: istore        5
+      36: aconst_null
+      37: nop
+      38: areturn
+
+  public static final java.lang.Object[] access$getKeys$p(androidx.compose.foundation.lazy.layout.NearestRangeKeyIndexMap);
+    Code:
+       0: aload_0
+       1: getfield      #64                 // Field keys:[Ljava/lang/Object;
+       4: areturn
+
+  public static final int access$getKeysStartIndex$p(androidx.compose.foundation.lazy.layout.NearestRangeKeyIndexMap);
+    Code:
+       0: aload_0
+       1: getfield      #68                 // Field keysStartIndex:I
+       4: ireturn
+
+  static {};
+    Code:
+       0: bipush        8
+       2: putstatic     #138                // Field $stable:I
+       5: return
+}

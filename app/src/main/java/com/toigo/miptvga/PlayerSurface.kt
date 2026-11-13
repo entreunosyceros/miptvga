@@ -91,7 +91,7 @@ private val ProgressiveVodExtensions = setOf(
     ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".aac", ".flac", ".wav", ".m4a", ".webm", ".ogg"
 )
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun PlayerSurface(
     streamUrl: String,
@@ -147,7 +147,7 @@ internal fun PlayerSurface(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun VlcPlayerSurface(
     streamUrl: String,
@@ -529,7 +529,7 @@ private fun VlcPlayerSurface(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun ExoPlayerSurface(
     streamUrl: String,
@@ -1167,6 +1167,15 @@ private fun isLikelyLiveStream(urlInfo: PlaybackUrlInfo): Boolean {
 
     if (looksLikeVodStream(urlInfo)) return false
 
+    // A generic get.php URL can describe a catalogue or redirect to VOD. Keep
+    // recovery policy separate from evidence that the stream is actually live.
+    if (normalized.contains("get.php") &&
+        !normalized.contains("type=m3u_plus") &&
+        !normalized.contains("type=live") &&
+        !normalized.contains("output=ts") &&
+        !normalized.contains("output=m3u8") &&
+        !normalized.contains("action=get_live")) return false
+
     val inferredMimeType = inferMimeType(urlInfo)
     if (inferredMimeType == MimeTypes.APPLICATION_MPD || inferredMimeType == MimeTypes.APPLICATION_SS) {
         return false
@@ -1409,7 +1418,7 @@ private fun formatPlaybackError(error: PlaybackException): String {
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun createExoLoadControl(): DefaultLoadControl {
     return DefaultLoadControl.Builder()
         .setBufferDurationsMs(
@@ -1421,7 +1430,7 @@ private fun createExoLoadControl(): DefaultLoadControl {
         .build()
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 internal fun createExoLoadControlForStream(streamUrl: String): DefaultLoadControl {
     val urlInfo = analyzePlaybackUrl(streamUrl)
     return when {

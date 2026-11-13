@@ -19,13 +19,13 @@ private const val HttpConnectTimeoutMillis = 20_000
 private const val HttpReadTimeoutMillis = 45_000
 private const val CacheDirectoryName = "media_stream_cache"
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 internal object PlaybackCache {
     @Volatile
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     private var simpleCache: SimpleCache? = null
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun createDataSourceFactory(
         context: Context,
         requestHeaders: Map<String, String> = emptyMap(),
@@ -57,7 +57,7 @@ internal object PlaybackCache {
         }
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun clear(context: Context) {
         val appContext = context.applicationContext
         synchronized(this) {
@@ -68,7 +68,7 @@ internal object PlaybackCache {
         }
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun releaseAndClear(context: Context) {
         val appContext = context.applicationContext
         synchronized(this) {
@@ -86,7 +86,7 @@ internal object PlaybackCache {
         }
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun cacheSizeBytes(context: Context): Long {
         val cacheDir = File(context.applicationContext.cacheDir, CacheDirectoryName)
         if (!cacheDir.exists()) return 0L
@@ -95,7 +95,7 @@ internal object PlaybackCache {
             .sumOf { it.length() }
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     private fun getCache(context: Context): SimpleCache {
         simpleCache?.let { return it }
 

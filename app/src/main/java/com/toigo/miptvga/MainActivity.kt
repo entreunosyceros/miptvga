@@ -12,6 +12,7 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
+import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -23,7 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels {
         MainViewModel.factory(applicationContext)
@@ -47,9 +48,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Intercept through the public Window contract. Overriding the inherited
+        // AndroidX Core dispatch method exposes a library-restricted API to Lint.
+        val originalCallback = window.callback
+        window.callback = object : Window.Callback by originalCallback {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+                NavigationDiagnostics.traceKey(event) {
+                    handleKeyEvent(event) || originalCallback.dispatchKeyEvent(event)
+                }
+        }
+        NavigationDiagnostics.attach(this, intent.getBooleanExtra("diagnostic_navigation", false))
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         Coil.setImageLoader(ImageLoaderConfig.get(applicationContext))
         registerShutdownReceiver()
@@ -90,7 +101,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    private fun handleKeyEvent(event: KeyEvent): Boolean {
         if (event.isMouseBackKey()) {
             return if (event.action == KeyEvent.ACTION_UP) {
                 handleMouseBackGesture(event.eventTime)
@@ -144,7 +155,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        return super.dispatchKeyEvent(event)
+        return false
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -172,6 +183,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        NavigationDiagnostics.detach(window)
         cancelPendingBackgroundClose(resetFinishRequest = false)
         unregisterShutdownReceiver()
         PlaybackCache.releaseAndClear(applicationContext)

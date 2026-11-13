@@ -225,12 +225,14 @@ internal fun ChannelListEntry(
  * Pre-indexes playlist entries by group for O(1) group switches on large lists.
  */
 internal fun buildChannelsByGroupId(
-    entries: List<ChannelListEntry>
+    entries: List<ChannelListEntry>,
+    checkCancelled: () -> Unit = {}
 ): Map<String, List<ChannelListEntry>> {
     if (entries.isEmpty()) return emptyMap()
 
     val grouped = LinkedHashMap<String, MutableList<ChannelListEntry>>()
-    entries.forEach { entry ->
+    entries.forEachIndexed { index, entry ->
+        if (index and 255 == 0) checkCancelled()
         grouped.getOrPut(entry.groupId) { ArrayList() }.add(entry)
     }
     return grouped
@@ -283,7 +285,8 @@ internal fun isChannelFavorite(
 internal fun buildChannelGroups(
     entries: List<ChannelListEntry>,
     favoriteIds: Set<String>,
-    favoriteGroupIds: Set<String>
+    favoriteGroupIds: Set<String>,
+    checkCancelled: () -> Unit = {}
 ): List<ChannelGroup> {
     if (entries.isEmpty()) return emptyList()
 
@@ -293,7 +296,8 @@ internal fun buildChannelGroups(
     )
 
     val grouped = LinkedHashMap<String, GroupAccumulator>()
-    entries.forEach { entry ->
+    entries.forEachIndexed { index, entry ->
+        if (index and 255 == 0) checkCancelled()
         val accumulator = grouped[entry.groupId]
         if (accumulator == null) {
             grouped[entry.groupId] = GroupAccumulator(
@@ -308,6 +312,7 @@ internal fun buildChannelGroups(
     val channelGroups = grouped.entries
         .sortedBy { it.value.title.lowercase() }
         .map { (groupId, group) ->
+            checkCancelled()
             ChannelGroup(
                 id = groupId,
                 title = group.title,
@@ -316,7 +321,11 @@ internal fun buildChannelGroups(
             )
         }
 
-    val favoriteCount = entries.count { isChannelEntryFavorite(it, favoriteIds, favoriteGroupIds) }
+    var checked = 0
+    val favoriteCount = entries.count {
+        if (checked++ and 255 == 0) checkCancelled()
+        isChannelEntryFavorite(it, favoriteIds, favoriteGroupIds)
+    }
 
     return buildList(channelGroups.size + 2) {
         add(
@@ -339,6 +348,35 @@ internal fun buildChannelGroups(
         addAll(channelGroups)
     }
 }
+
+/**
+ * Entries are ordered by originalIndex: mapIndexed establishes it, and grouping
+ * and filtering preserve it. All uses the original list, so its lookup is O(1).
+ * Subsets need O(log K) reads, without allocating a reverse map for K entries.
+ */
+internal fun findVisibleChannelIndex(entries: List<ChannelListEntry>, originalIndex: Int): Int {
+    if (originalIndex < 0) return -1
+    if (entries.getOrNull(originalIndex)?.originalIndex == originalIndex) return originalIndex
+    var low = 0
+    var high = entries.lastIndex
+    while (low <= high) {
+        val middle = low + ((high - low) ushr 1)
+        val candidate = entries[middle].originalIndex
+        when {
+            candidate < originalIndex -> low = middle + 1
+            candidate > originalIndex -> high = middle - 1
+            else -> return middle
+        }
+    }
+    return -1
+}
+
+/** Reconcile with the selection at publication time, never its old snapshot. */
+internal fun visibleIndexForSelection(
+    selectedIndex: Int,
+    entries: List<ChannelListEntry>
+): Int = findVisibleChannelIndex(entries, selectedIndex).takeIf { it >= 0 }
+    ?: if (entries.isNotEmpty()) 0 else -1
 
 internal fun epgLookupKeysForChannel(channel: Channel): List<String> {
     return buildList(2) {

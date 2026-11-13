@@ -1,0 +1,27 @@
+Lint debug: 147 errores, 56 avisos. Ejecución real 2026-11-13.
+Error: RestrictedApi: 3
+Error: UnsafeOptInUsageError: 144
+Warning: AndroidGradlePluginVersion: 1
+Warning: ChromeOsAbiSupport: 1
+Warning: ClickableViewAccessibility: 2
+Warning: DefaultLocale: 4
+Warning: GradleDependency: 16
+Warning: IconLauncherShape: 5
+Warning: IconLocation: 1
+Warning: IconXmlAndPng: 1
+Warning: InlinedApi: 6
+Warning: NewerVersionAvailable: 3
+Warning: ObsoleteSdkInt: 2
+Warning: OldTargetApi: 1
+Warning: Overdraw: 2
+Warning: UnusedResources: 5
+Warning: UseKtx: 6
+
+Tests unitarios (fuentes locales ignoradas por Git):
+com.toigo.miptvga.FavoritesBehaviorTest: tests=3, fallos=0, errores=0
+com.toigo.miptvga.GroupAggregationTest: tests=2, fallos=0, errores=0
+com.toigo.miptvga.M3uParserTest: tests=10, fallos=0, errores=0
+com.toigo.miptvga.PlaybackUrlHeuristicsTest: tests=15, fallos=3, errores=0
+  FALLA: reconnectsAmbiguousRemoteXtreamStyleStreamAfterEnd
+  FALLA: disablesPlaybackCacheForAmbiguousRemoteXtreamLikeStream
+  FALLA: recoversRemoteXtreamLikeStreamAfterEnd

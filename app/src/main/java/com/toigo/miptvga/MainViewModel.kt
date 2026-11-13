@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +26,7 @@ private const val XtreamKeepAliveInitialDelayMillis = 2_000L
 private const val XtreamKeepAliveRetryDelayMillis = 8_000L
 private const val AutoEpgChannelLimit = 40_000
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 internal class MainViewModel(
     private val appContext: Context,
     private val repository: PlaylistRepository,
@@ -56,10 +58,12 @@ internal class MainViewModel(
     private var channelsByGroupId: Map<String, List<ChannelListEntry>> = emptyMap()
     private var continuousPlayOriginalIndices: List<Int> = emptyList()
     private var cachedGroups: List<ChannelGroup> = emptyList()
-    private var filteredIndexByOriginalIndex: Map<Int, Int> = emptyMap()
     private var browserRootPaths: Set<String> = emptySet()
     private var filterJob: Job? = null
-    private var epgRefreshJob: Job? = null
+    private var epgTickerJob: Job? = null
+    private val playlistLoads = LatestTask(viewModelScope)
+    private val epgLoads = LatestTask(viewModelScope)
+    private val browserLoads = LatestTask(viewModelScope)
     private var xtreamKeepAliveJob: Job? = null
     private var epgTimelinesByKey: Map<String, List<CurrentProgram>> = emptyMap()
     private var xtreamKeepAliveSignature: String? = null
@@ -158,6 +162,7 @@ internal class MainViewModel(
     }
 
     fun closeFileBrowser() {
+        browserLoads.cancel()
         _uiState.value = _uiState.value.copy(
             currentScreen = AppScreen.MAIN,
             isFileBrowserLoading = false
@@ -172,15 +177,16 @@ internal class MainViewModel(
     }
 
     fun loadFileBrowserRoots(context: Context) {
-        viewModelScope.launch {
+        browserLoads.launch { request ->
             _uiState.value = _uiState.value.copy(
                 currentScreen = AppScreen.FILE_BROWSER,
                 isFileBrowserLoading = true,
                 fileBrowserStatus = "Cargando ubicaciones..."
             )
 
-            runCatching { fileBrowserRepository.listRoots(context) }
+            runCatchingCancellable { fileBrowserRepository.listRoots(context) }
                 .onSuccess { entries ->
+                    request.ensureCurrent()
                     browserRootPaths = entries.map { it.path }.toSet()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserEntries = entries,
@@ -195,6 +201,7 @@ internal class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserEntries = emptyList(),
                         fileBrowserCurrentPath = null,
@@ -207,15 +214,16 @@ internal class MainViewModel(
     }
 
     fun openFileBrowserDirectory(path: String) {
-        viewModelScope.launch {
+        browserLoads.launch { request ->
             _uiState.value = _uiState.value.copy(
                 currentScreen = AppScreen.FILE_BROWSER,
                 isFileBrowserLoading = true,
                 fileBrowserStatus = "Abriendo carpeta..."
             )
 
-            runCatching { fileBrowserRepository.listDirectory(path) }
+            runCatchingCancellable { fileBrowserRepository.listDirectory(path) }
                 .onSuccess { entries ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserEntries = entries,
                         fileBrowserCurrentPath = path,
@@ -229,6 +237,7 @@ internal class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserStatus = "No se pudo abrir la carpeta: ${error.message}",
                         isFileBrowserLoading = false,
@@ -245,7 +254,7 @@ internal class MainViewModel(
             return
         }
 
-        val currentFile = runCatching { File(currentPath).canonicalFile }.getOrNull()
+        val currentFile = runCatchingCancellable { File(currentPath).canonicalFile }.getOrNull()
         val canonicalCurrentPath = currentFile?.absolutePath
 
         if (canonicalCurrentPath == null || canonicalCurrentPath in browserRootPaths) {
@@ -273,7 +282,7 @@ internal class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             lastPlaylistStore.saveSelectedGroupId(groupId)
         }
-        // Group switches use a prebuilt index; apply on the main thread for instant UI.
+        // Unsearched groups reuse ordered lists; selection lookup does not build a global map.
         scheduleFiltering(immediate = true, preferSync = true)
     }
 
@@ -324,7 +333,7 @@ internal class MainViewModel(
         val remaining = if (continuousActive) continuousPlayRemainingFrom(index) else 0
         _uiState.value = _uiState.value.copy(
             selectedIndex = index,
-            selectedVisibleIndex = filteredIndexByOriginalIndex[index] ?: -1,
+            selectedVisibleIndex = findVisibleChannelIndex(_uiState.value.filteredChannels, index),
             controlsVisible = true,
             status = "Abriendo: ${channel.name}",
             playbackMessage = if (continuousActive) {
@@ -546,19 +555,20 @@ internal class MainViewModel(
             return
         }
 
-        epgRefreshJob?.cancel()
-        viewModelScope.launch {
+        epgTickerJob?.cancel()
+        epgLoads.launch { request ->
             _uiState.value = _uiState.value.copy(
                 isEpgLoading = true,
                 epgStatus = "Cargando EPG…"
             )
 
-            runCatching {
+            runCatchingCancellable {
                 epgRepository.loadProgramTimelines(
                     epgUrl = settings.url,
-                    channels = _uiState.value.channels
+                    channels = state.channels
                 )
             }.onSuccess { timelines ->
+                request.ensureCurrent()
                 epgTimelinesByKey = timelines
                 val nowMillis = System.currentTimeMillis()
                 val currentPrograms = resolveCurrentPrograms(nowMillis)
@@ -575,6 +585,7 @@ internal class MainViewModel(
                 )
                 startEpgTicker()
             }.onFailure { error ->
+                request.ensureCurrent()
                 clearEpgState("Error EPG: ${error.message}")
             }
         }
@@ -657,6 +668,7 @@ internal class MainViewModel(
     }
 
     fun prepareForBackgroundExit() {
+        cancelSessionTasks()
         stopXtreamKeepAlive()
         val currentState = _uiState.value
         _uiState.value = currentState.copy(
@@ -696,6 +708,7 @@ internal class MainViewModel(
 
     fun openMain() {
         if (_uiState.value.currentScreen == AppScreen.MAIN) return
+        browserLoads.cancel()
         _uiState.value = _uiState.value.copy(currentScreen = AppScreen.MAIN)
     }
 
@@ -828,7 +841,9 @@ internal class MainViewModel(
         restoring: Boolean,
         preferredGroupId: String
     ) {
-        viewModelScope.launch {
+        playlistLoads.launch { request ->
+            filterJob?.cancel()
+            clearEpgState(_uiState.value.epgSettings.statusLabel())
             _uiState.value = _uiState.value.copy(
                 playlistSource = source,
                 currentScreen = AppScreen.MAIN,
@@ -838,16 +853,19 @@ internal class MainViewModel(
                 playbackMessageIsError = false
             )
 
-            runCatching { repository.loadFromUrl(url) }
+            runCatchingCancellable { repository.loadFromUrl(url) }
                 .onSuccess { channels ->
+                    request.ensureCurrent()
                     applyLoadedChannels(
                         channels = channels,
                         messagePrefix = if (restoring) "Lista recuperada" else "Lista cargada",
                         source = source,
-                        preferredGroupId = preferredGroupId
+                        preferredGroupId = preferredGroupId,
+                        request = request
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         playlistSource = source,
                         status = if (restoring) {
@@ -868,7 +886,9 @@ internal class MainViewModel(
         restoring: Boolean,
         preferredGroupId: String
     ) {
-        viewModelScope.launch {
+        playlistLoads.launch { request ->
+            filterJob?.cancel()
+            clearEpgState(_uiState.value.epgSettings.statusLabel())
             _uiState.value = _uiState.value.copy(
                 playlistSource = source,
                 currentScreen = AppScreen.MAIN,
@@ -878,16 +898,19 @@ internal class MainViewModel(
                 playbackMessageIsError = false
             )
 
-            runCatching { repository.loadFromUri(appContext, uri) }
+            runCatchingCancellable { repository.loadFromUri(appContext, uri) }
                 .onSuccess { channels ->
+                    request.ensureCurrent()
                     applyLoadedChannels(
                         channels = channels,
                         messagePrefix = if (restoring) "Archivo recuperado" else "Archivo cargado",
                         source = source,
-                        preferredGroupId = preferredGroupId
+                        preferredGroupId = preferredGroupId,
+                        request = request
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         playlistSource = source,
                         status = if (restoring) {
@@ -908,7 +931,9 @@ internal class MainViewModel(
         restoring: Boolean,
         preferredGroupId: String
     ) {
-        viewModelScope.launch {
+        playlistLoads.launch { request ->
+            filterJob?.cancel()
+            clearEpgState(_uiState.value.epgSettings.statusLabel())
             _uiState.value = _uiState.value.copy(
                 playlistSource = source,
                 currentScreen = if (restoring) AppScreen.MAIN else _uiState.value.currentScreen,
@@ -919,13 +944,15 @@ internal class MainViewModel(
                 playbackMessageIsError = false
             )
 
-            runCatching { repository.loadFromFile(file) }
+            runCatchingCancellable { repository.loadFromFile(file) }
                 .onSuccess { channels ->
+                    request.ensureCurrent()
                     applyLoadedChannels(
                         channels = channels,
                         messagePrefix = if (restoring) "Archivo recuperado" else "Archivo cargado",
                         source = source,
-                        preferredGroupId = preferredGroupId
+                        preferredGroupId = preferredGroupId,
+                        request = request
                     )
                     _uiState.value = _uiState.value.copy(
                         currentScreen = AppScreen.MAIN,
@@ -933,6 +960,7 @@ internal class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         playlistSource = source,
                         status = if (restoring) {
@@ -953,27 +981,39 @@ internal class MainViewModel(
         channels: List<Channel>,
         messagePrefix: String,
         source: PlaylistSource,
-        preferredGroupId: String
+        preferredGroupId: String,
+        request: LatestTask.Request
     ) {
-        stopXtreamKeepAlive()
-        val currentState = _uiState.value
-        val favoriteIds = currentState.favoriteIds
-        val favoriteGroupIds = currentState.favoriteGroupIds
-        val prepared = withContext(Dispatchers.Default) {
-            prepareLoadedChannels(
-                channels = channels,
-                favoriteIds = favoriteIds,
-                favoriteGroupIds = favoriteGroupIds,
-                preferredGroupId = preferredGroupId,
-                searchQuery = currentState.searchQuery
-            )
+        var snapshot = _uiState.value
+        var targetGroupId = preferredGroupId
+        var prepared: PreparedChannels
+        while (true) {
+            request.ensureCurrent()
+            val context = currentCoroutineContext()
+            prepared = withContext(Dispatchers.Default) {
+                prepareLoadedChannels(
+                    channels = channels,
+                    favoriteIds = snapshot.favoriteIds,
+                    favoriteGroupIds = snapshot.favoriteGroupIds,
+                    preferredGroupId = targetGroupId,
+                    searchQuery = snapshot.searchQuery,
+                    checkCancelled = { context.ensureActive() }
+                )
+            }
+            request.ensureCurrent()
+            val latest = _uiState.value
+            if (snapshot.favoriteIds == latest.favoriteIds &&
+                snapshot.favoriteGroupIds == latest.favoriteGroupIds &&
+                snapshot.searchQuery == latest.searchQuery &&
+                snapshot.selectedGroupId == latest.selectedGroupId) break
+            if (snapshot.selectedGroupId != latest.selectedGroupId) targetGroupId = latest.selectedGroupId
+            snapshot = latest
         }
-
+        filterJob?.cancel()
+        stopXtreamKeepAlive()
         indexedChannels = prepared.indexedChannels
         channelsByGroupId = prepared.channelsByGroupId
         cachedGroups = prepared.groups
-        filteredIndexByOriginalIndex = emptyMap()
-        filteredIndexByOriginalIndex = prepared.filterResult.indexByOriginalIndex
         continuousPlayOriginalIndices = emptyList()
         lastPlaylistStore.saveSource(source)
         lastPlaylistStore.saveSelectedGroupId(prepared.resolvedGroupId)
@@ -1010,7 +1050,6 @@ internal class MainViewModel(
         if (indexedChannels.isEmpty()) {
             cachedGroups = emptyList()
             channelsByGroupId = emptyMap()
-            filteredIndexByOriginalIndex = emptyMap()
             _uiState.value = _uiState.value.copy(
                 filteredChannels = emptyList(),
                 groups = emptyList(),
@@ -1026,6 +1065,9 @@ internal class MainViewModel(
         val favoriteIdsSnapshot = _uiState.value.favoriteIds
         val favoriteGroupIdsSnapshot = _uiState.value.favoriteGroupIds
         val channelsSnapshot = _uiState.value.channels
+        val entriesSnapshot = indexedChannels
+        val byGroupSnapshot = channelsByGroupId
+        val groupsSnapshot = cachedGroups
         val selectedIndexSnapshot = _uiState.value.selectedIndex
         val canApplySync =
             preferSync &&
@@ -1033,17 +1075,18 @@ internal class MainViewModel(
                 selectedGroupIdSnapshot != FavoriteChannelsGroupId
 
         fun applyFilterResult(filterResult: FilterResult, latestState: UiState = _uiState.value) {
-            filteredIndexByOriginalIndex = filterResult.indexByOriginalIndex
             _uiState.value = latestState.copy(
                 filteredChannels = filterResult.filteredChannels,
                 groups = filterResult.groups,
-                selectedIndex = filterResult.selectedIndex,
-                selectedVisibleIndex = filterResult.selectedVisibleIndex
+                selectedIndex = latestState.selectedIndex,
+                selectedVisibleIndex = visibleIndexForSelection(
+                    latestState.selectedIndex, filterResult.filteredChannels
+                )
             )
         }
 
         if (canApplySync) {
-            applyFilterResult(
+            applyFilterResult(NavigationDiagnostics.measureWork("filter.sync") {
                 computeFilterResult(
                     entries = indexedChannels,
                     channelsByGroupId = channelsByGroupId,
@@ -1055,26 +1098,30 @@ internal class MainViewModel(
                     groups = cachedGroups,
                     preservePlaybackSelection = true
                 )
-            )
+            })
             return
         }
 
         filterJob = viewModelScope.launch {
             if (!immediate) delay(SearchDebounceMillis)
 
-            val filterResult = runCatching {
+            val context = currentCoroutineContext()
+            val filterResult = runCatchingCancellable {
                 withContext(Dispatchers.Default) {
-                    computeFilterResult(
-                        entries = indexedChannels,
-                        channelsByGroupId = channelsByGroupId,
-                        selectedGroupId = selectedGroupIdSnapshot,
-                        searchQuery = querySnapshot,
-                        favoriteIds = favoriteIdsSnapshot,
-                        favoriteGroupIds = favoriteGroupIdsSnapshot,
-                        selectedIndex = selectedIndexSnapshot,
-                        groups = cachedGroups,
-                        preservePlaybackSelection = true
-                    )
+                    NavigationDiagnostics.measureWork("filter.async") {
+                        computeFilterResult(
+                            entries = entriesSnapshot,
+                            channelsByGroupId = byGroupSnapshot,
+                            selectedGroupId = selectedGroupIdSnapshot,
+                            searchQuery = querySnapshot,
+                            favoriteIds = favoriteIdsSnapshot,
+                            favoriteGroupIds = favoriteGroupIdsSnapshot,
+                            selectedIndex = selectedIndexSnapshot,
+                            groups = groupsSnapshot,
+                            preservePlaybackSelection = true,
+                            checkCancelled = { context.ensureActive() }
+                        )
+                    }
                 }
             }.getOrElse { return@launch }
 
@@ -1115,7 +1162,8 @@ internal class MainViewModel(
     }
 
     private fun clearEpgState(status: String) {
-        epgRefreshJob?.cancel()
+        epgLoads.cancel()
+        epgTickerJob?.cancel()
         epgTimelinesByKey = emptyMap()
         _uiState.value = _uiState.value.copy(
             currentPrograms = emptyMap(),
@@ -1126,10 +1174,10 @@ internal class MainViewModel(
     }
 
     private fun startEpgTicker() {
-        epgRefreshJob?.cancel()
+        epgTickerJob?.cancel()
         if (epgTimelinesByKey.isEmpty()) return
 
-        epgRefreshJob = viewModelScope.launch {
+        epgTickerJob = viewModelScope.launch {
             while (true) {
                 delay(EpgRefreshIntervalMillis)
                 val nowMillis = System.currentTimeMillis()
@@ -1174,6 +1222,7 @@ internal class MainViewModel(
 
     private fun openAuxiliaryScreen(screen: AppScreen) {
         if (_uiState.value.currentScreen == screen) return
+        browserLoads.cancel()
         _uiState.value = _uiState.value.copy(
             currentScreen = screen,
             isFullscreen = false,
@@ -1229,7 +1278,7 @@ internal class MainViewModel(
         xtreamKeepAliveSignature = null
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun clearPlaybackCache() {
         viewModelScope.launch(Dispatchers.IO) {
             PlaybackCache.releaseAndClear(appContext)
@@ -1246,7 +1295,7 @@ internal class MainViewModel(
         showMaintenanceMessage("Caché de imágenes limpiada")
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun clearAllCache() {
         viewModelScope.launch(Dispatchers.IO) {
             PlaybackCache.releaseAndClear(appContext)
@@ -1258,21 +1307,21 @@ internal class MainViewModel(
     }
 
     fun resetPreferences() {
+        cancelSessionTasks()
         lastPlaylistStore.clearAll()
         val clearedState = UiState()
         _uiState.value = clearedState
         indexedChannels = emptyList()
         channelsByGroupId = emptyMap()
         cachedGroups = emptyList()
-        filteredIndexByOriginalIndex = emptyMap()
         continuousPlayOriginalIndices = emptyList()
         epgTimelinesByKey = emptyMap()
         stopXtreamKeepAlive()
-        epgRefreshJob?.cancel()
+        epgTickerJob?.cancel()
         showMaintenanceMessage("Preferencias restablecidas")
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun resetApp() {
         viewModelScope.launch(Dispatchers.IO) {
             PlaybackCache.releaseAndClear(appContext)
@@ -1284,7 +1333,7 @@ internal class MainViewModel(
         showMaintenanceMessage("Aplicación restablecida por completo")
     }
 
-    @UnstableApi
+    @androidx.annotation.OptIn(UnstableApi::class)
     fun refreshStorageInfo() {
         viewModelScope.launch(Dispatchers.IO) {
             val playbackCacheSize = PlaybackCache.cacheSizeBytes(appContext)
@@ -1325,17 +1374,26 @@ internal class MainViewModel(
         )
     }
 
+    private fun cancelSessionTasks() {
+        playlistLoads.cancel()
+        epgLoads.cancel()
+        browserLoads.cancel()
+        filterJob?.cancel()
+        epgTickerJob?.cancel()
+        stopXtreamKeepAlive()
+    }
+
     override fun onCleared() {
+        cancelSessionTasks()
         stopXtreamKeepAlive()
         networkMonitor.stop()
-        epgRefreshJob?.cancel()
+        epgTickerJob?.cancel()
         filterJob?.cancel()
         super.onCleared()
     }
 
     private data class FilterResult(
         val filteredChannels: List<ChannelListEntry>,
-        val indexByOriginalIndex: Map<Int, Int>,
         val selectedIndex: Int,
         val selectedVisibleIndex: Int,
         val groups: List<ChannelGroup>
@@ -1354,16 +1412,18 @@ internal class MainViewModel(
         favoriteIds: Set<String>,
         favoriteGroupIds: Set<String>,
         preferredGroupId: String,
-        searchQuery: String
+        searchQuery: String,
+        checkCancelled: () -> Unit = {}
     ): PreparedChannels {
         val indexedEntries = channels.mapIndexed { index, channel ->
+            if (index and 255 == 0) checkCancelled()
             ChannelListEntry(
                 originalIndex = index,
                 channel = channel
             )
         }
-        val byGroupId = buildChannelsByGroupId(indexedEntries)
-        val groups = buildChannelGroups(indexedEntries, favoriteIds, favoriteGroupIds)
+        val byGroupId = buildChannelsByGroupId(indexedEntries, checkCancelled)
+        val groups = buildChannelGroups(indexedEntries, favoriteIds, favoriteGroupIds, checkCancelled)
         val resolvedGroupId = resolveGroupId(preferredGroupId, groups)
         return PreparedChannels(
             indexedChannels = indexedEntries,
@@ -1379,7 +1439,8 @@ internal class MainViewModel(
                 favoriteGroupIds = favoriteGroupIds,
                 selectedIndex = -1,
                 groups = groups,
-                preservePlaybackSelection = false
+                preservePlaybackSelection = false,
+                checkCancelled = checkCancelled
             )
         )
     }
@@ -1393,11 +1454,15 @@ internal class MainViewModel(
         favoriteGroupIds: Set<String>,
         selectedIndex: Int,
         groups: List<ChannelGroup>,
-        preservePlaybackSelection: Boolean
+        preservePlaybackSelection: Boolean,
+        checkCancelled: () -> Unit = {}
     ): FilterResult {
+        checkCancelled()
+        var checked = 0
         val groupFiltered = when (selectedGroupId) {
             AllChannelsGroupId -> entries
             FavoriteChannelsGroupId -> entries.filter {
+                if (checked++ and 255 == 0) checkCancelled()
                 isChannelEntryFavorite(it, favoriteIds, favoriteGroupIds)
             }
             else -> channelsByGroupId[selectedGroupId].orEmpty()
@@ -1407,15 +1472,13 @@ internal class MainViewModel(
             groupFiltered
         } else {
             groupFiltered.filter { entry ->
+                if (checked++ and 255 == 0) checkCancelled()
                 entry.channel.name.contains(searchQuery, ignoreCase = true) ||
                     entry.groupTitle.contains(searchQuery, ignoreCase = true)
             }
         }
 
-        val indexMap = HashMap<Int, Int>(filteredChannels.size.coerceAtLeast(16))
-        filteredChannels.forEachIndexed { visibleIndex, entry ->
-            indexMap[entry.originalIndex] = visibleIndex
-        }
+        val selectedPosition = findVisibleChannelIndex(filteredChannels, selectedIndex)
 
         val resolvedSelectedIndex = when {
             selectedIndex < 0 -> if (!preservePlaybackSelection && filteredChannels.isNotEmpty()) {
@@ -1423,24 +1486,17 @@ internal class MainViewModel(
             } else {
                 selectedIndex
             }
-            indexMap.containsKey(selectedIndex) -> selectedIndex
+            selectedPosition >= 0 -> selectedIndex
             // Keep current playback when browsing another group; only auto-pick on initial load.
             preservePlaybackSelection -> selectedIndex
             filteredChannels.isNotEmpty() -> filteredChannels.first().originalIndex
             else -> -1
         }
 
-        val selectedVisibleIndex = indexMap[resolvedSelectedIndex]
-            ?: if (filteredChannels.isNotEmpty() && !indexMap.containsKey(selectedIndex)) {
-                // Focus the top of the new group list without changing playback.
-                0
-            } else {
-                -1
-            }
+        val selectedVisibleIndex = visibleIndexForSelection(resolvedSelectedIndex, filteredChannels)
 
         return FilterResult(
             filteredChannels = filteredChannels,
-            indexByOriginalIndex = indexMap,
             selectedIndex = resolvedSelectedIndex,
             selectedVisibleIndex = selectedVisibleIndex,
             groups = groups
@@ -1448,7 +1504,7 @@ internal class MainViewModel(
     }
 
     companion object {
-        @UnstableApi
+        @androidx.annotation.OptIn(UnstableApi::class)
         internal fun factory(applicationContext: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {

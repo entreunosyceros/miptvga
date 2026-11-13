@@ -63,6 +63,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -77,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -522,7 +524,7 @@ private fun createFallbackManageAllFilesIntent(): Intent {
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun RootScreen(vm: MainViewModel) {
     val ui by vm.uiState.collectAsStateWithLifecycle()
@@ -1749,7 +1751,7 @@ private fun SettingsScreen(
     }
 }
 
-@androidx.media3.common.util.UnstableApi
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun MaintenanceSection(vm: MainViewModel) {
     val storageInfo by vm.storageInfo.collectAsStateWithLifecycle()
@@ -2080,7 +2082,7 @@ private fun LandingScreen(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun MainScreen(
     ui: UiState,
@@ -2254,12 +2256,13 @@ private fun SidePanel(
     onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
+    SideEffect { NavigationDiagnostics.composedPanel() }
     val panelModifier = if (widthOverride != null) {
         modifier.width(widthOverride)
     } else {
         modifier
     }
-    val selectedEntry = filteredChannels.firstOrNull { it.originalIndex == selectedIndex }
+    val selectedEntry = filteredChannels.getOrNull(findVisibleChannelIndex(filteredChannels, selectedIndex))
     val selectedGroupTitle = groups.firstOrNull { it.id == selectedGroupId }?.title ?: "Todos los canales"
     var channelListFocusToken by rememberSaveable { mutableIntStateOf(0) }
 
@@ -2919,6 +2922,8 @@ private fun ChannelList(
     onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
+    SideEffect { NavigationDiagnostics.catalogueShown(listResetKey == AllChannelsGroupId, filteredChannels) }
+    DisposableEffect(Unit) { onDispose { NavigationDiagnostics.catalogueHidden() } }
     if (filteredChannels.isEmpty()) {
         Box(
             modifier = modifier
@@ -3006,6 +3011,7 @@ private fun ChannelRow(
     onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
+    SideEffect { NavigationDiagnostics.composedRow() }
     val interactionSource = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -3047,6 +3053,7 @@ private fun ChannelRow(
                 color = accentColor,
                 shape = ItemShape
             )
+            .onFocusChanged { if (it.isFocused) NavigationDiagnostics.focusChanged() }
             .focusRequester(focusRequester)
             .combinedClickable(
                 interactionSource = interactionSource,
@@ -3303,7 +3310,7 @@ private fun playbackTimelineLabel(state: PlaybackControllerState): String {
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun PlayerPanel(
     modifier: Modifier,
@@ -3789,7 +3796,7 @@ private fun PlayerBottomControlsOverlay(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun FullscreenPlayerPanel(
     modifier: Modifier,

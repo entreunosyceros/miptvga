@@ -3,14 +3,18 @@ package com.toigo.miptvga
 import android.content.Context
 import android.os.Environment
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
 internal class FileBrowserRepository {
     suspend fun listRoots(context: Context): List<FileBrowserEntry> = withContext(Dispatchers.IO) {
+        val jobContext = currentCoroutineContext()
         buildRootCandidates(context)
             .mapNotNull { (file, label) ->
+                jobContext.ensureActive()
                 val canonical = canonicalReadableDirectory(file) ?: return@mapNotNull null
                 FileBrowserEntry(
                     path = canonical.absolutePath,
@@ -25,16 +29,18 @@ internal class FileBrowserRepository {
     }
 
     suspend fun listDirectory(path: String): List<FileBrowserEntry> = withContext(Dispatchers.IO) {
+        val jobContext = currentCoroutineContext()
         val directory = File(path)
         val canonicalDirectory = canonicalReadableDirectory(directory)
             ?: error("No se puede abrir la carpeta seleccionada")
 
         val children = canonicalDirectory.listFiles()
             ?.asSequence()
-            ?.filter { it.exists() && it.canRead() && !it.isHidden }
+            ?.filter { jobContext.ensureActive(); it.exists() && it.canRead() && !it.isHidden }
             ?.filter { it.isDirectory || isPlaylistFile(it) }
             ?.sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase(Locale.ROOT) }))
             ?.map { file ->
+                jobContext.ensureActive()
                 FileBrowserEntry(
                     path = file.absolutePath,
                     name = file.name.ifBlank { file.absolutePath },

@@ -1,0 +1,166 @@
+[
+  {
+    "archivo": ".github/workflows/ci.yml",
+    "sha256": "fc88d763ef6872920c605816748ced52475246324a9599c7efa69739cd90face"
+  },
+  {
+    "archivo": ".gitignore",
+    "sha256": "1150bd48b3f27490993428ec07c685a4c165470e82e5cb2be6f2432a5d96a0d4"
+  },
+  {
+    "archivo": "app/build.gradle.kts",
+    "sha256": "297728b7d3c682728f8ed1bfcaf50380a122be28ef6f4cfd55fe724889b1b201"
+  },
+  {
+    "archivo": "app/src/androidTest/java/com/toigo/miptvga/XmltvAndroidTest.kt",
+    "sha256": "5f77caae5f7eba4e043d76349d2e936a1c14db7ea56f61f8e1428214e9d0589e"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/AdaptiveLayout.kt",
+    "sha256": "0c203e845a5c32a6eb20e14c1e2bd159e4dfbb5c55ff492a111ac7607b0a2da0"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/AppScreens.kt",
+    "sha256": "031b177647913d8d8a17ed16012f2f90c20c78b44578eb739b01f5a68d8f444c"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/EpgRepository.kt",
+    "sha256": "f4d8dd14bc61e0d7914895a76d352abed6c8cfcffbd1ec8659de0b0cdf541ac1"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/FileBrowserRepository.kt",
+    "sha256": "7f2332087b334f76206d501cf8199dc1fdbb9add4828d54aae357ab4302070f7"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ImageLoaderConfig.kt",
+    "sha256": "536d2d7cb167889935c0688b39925e0d558f52e370254f4c50f0b16636d7489f"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/LastPlaylistStore.kt",
+    "sha256": "7a90a2a041a33c51893235f1d562377253a53a3623690dd569a992fab8e50478"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/LatestTask.kt",
+    "sha256": "66508725f5541e4ec2fa91dd2c635d4aebb508ef4513f5c9b229d60eabbb5b37"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/M3uParser.kt",
+    "sha256": "f6f706fb9f84c9f21aaa9b797c6775bc6bb3b5c0022c291d125297f6cfe15609"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/MainActivity.kt",
+    "sha256": "66dedca0e8524071f465a397fda7d465bd86e44ce51c913a12394410358f2cb1"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/MainViewModel.kt",
+    "sha256": "2ffca4dec55e9edd78f9a334dbc13de91c205b9414bf5bad903bb47137f04e9d"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/Models.kt",
+    "sha256": "682d0ed0bfe5235f8b55d2d98c1af2d3cd98bdeff5d70c69e4d27955633205c0"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/NavigationDiagnostics.kt",
+    "sha256": "c3ea7382783bc597f335efb71a4f791c79248e8a40281f1a4380c50321e8a777"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/NetworkMonitor.kt",
+    "sha256": "dfd6c4423f885facd3598b99e6f455494324199564112201061d943da4c04123"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/PlaybackCache.kt",
+    "sha256": "79d6e55f7a9998d3220cb03d3b589c114efef7b91a8cc75f7f84cf1dae997e02"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/PlayerSurface.kt",
+    "sha256": "c05df404cb5fe36ba414e024e110ca6ed001fb8cee35b39af264771b4924b5d4"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/PlaylistLoader.kt",
+    "sha256": "954c945aa858a5fac988584a48cd2b8ec05fd8f6721eeadc8957085aad452643"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/PlaylistRepository.kt",
+    "sha256": "83bf6a03489a1d624408b871a2b8002c117460467b0bdb4226baf9518561ca46"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/UiTheme.kt",
+    "sha256": "0fe5a97587f3d202ddd4425a8eb7727b7b9ff3f359e40bb86416878df6bf9c90"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/XmltvParser.kt",
+    "sha256": "3caf5f60f4d0fb7ce2fe5577417b62bda429d8aa0ca9fea99b3a752543068b28"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/XtreamSession.kt",
+    "sha256": "d0cf8e1ef626275c81017643c77b66d68dc42fee262b0f2e720cbc97005ce319"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/AboutScreen.kt",
+    "sha256": "bda41ccaa15085d71251323a9e9235c5dfe65baf09c534ba86d9adb85d7aa4cb"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/ChannelInfoScreen.kt",
+    "sha256": "f62f593f29fe1e8f8e2b2c0a2b537e1f7602bfb68d06f3c93cdceec7fb347efe"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/FileBrowserScreen.kt",
+    "sha256": "61fd9ccd521f4eadf8d41047be14402c800447c9540417978d8ddaaad6e29f7c"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/GuideScreen.kt",
+    "sha256": "9f186ce8395262869db6cf9b24e4666f455b39e799c59c9bf3af0b695a3187af"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/LandingScreen.kt",
+    "sha256": "854a522cf7b3fdfc4d059687f56d606323b01ad38384c6b64d139612fdde4b94"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/SearchScreen.kt",
+    "sha256": "afaa59855c868a07fe1eac3a3dfc7ccbf5c23e863b6f4ff61518cb8984020634"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/SettingsScreen.kt",
+    "sha256": "10fe89ffce61e7667bd7119f96af69d620a94220565623460c876e73445bc2a3"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/components/ChannelGroupComponents.kt",
+    "sha256": "bb8e1983f6a9555a217cebf0741307a2afd3eb70355578650c784528e6f5f9ea"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/components/PlayerComponents.kt",
+    "sha256": "abc2b0aa2171135be616fd92c69f0ef7b24e16fb1277375afd75540344e8f8a1"
+  },
+  {
+    "archivo": "app/src/main/java/com/toigo/miptvga/ui/components/SharedComponents.kt",
+    "sha256": "bae7cc9700384d687df06bdfc9e5523dcef288a2ef58972a9432d57a7b268f0f"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/FavoritesBehaviorTest.kt",
+    "sha256": "b973f01f826b7ab1c48a16381efc8c544c414a7f211e902647345c3d30d38aff"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/GroupAggregationTest.kt",
+    "sha256": "40029766f5596a1d4086273a6020bf39d749f0be475105c18e4561d703f19878"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/LatestTaskTest.kt",
+    "sha256": "a37857e262d6305d8c515d507a7a585d2c6bf5b53d30048df3cb0d014f2502c7"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/M3uParserTest.kt",
+    "sha256": "c5b14d639ef05a357c2bdec2f7f7bd418ca3c0d68ea48678b7e4e3c68b743f3a"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/PlaybackUrlHeuristicsTest.kt",
+    "sha256": "a5cd72b15248b11df67f9004152a95f283c9059cdb42d95129e45b185933fa8c"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/PlaylistLoaderTest.kt",
+    "sha256": "f7c757f900dcdf1d1e328802e699cdd6f55078a0422995da10dcd51e314e01a9"
+  },
+  {
+    "archivo": "app/src/test/java/com/toigo/miptvga/XmltvParserTest.kt",
+    "sha256": "a2402a92e66d873d7ad1ee32b5fd27d808a1db10a776cd22e958b44d9a26eb72"
+  }
+]
