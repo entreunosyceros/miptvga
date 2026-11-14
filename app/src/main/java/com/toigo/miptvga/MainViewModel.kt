@@ -7,12 +7,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.media3.common.util.UnstableApi
 import java.io.File
 import java.util.LinkedHashMap
@@ -24,7 +28,7 @@ private const val XtreamKeepAliveInitialDelayMillis = 2_000L
 private const val XtreamKeepAliveRetryDelayMillis = 8_000L
 private const val AutoEpgChannelLimit = 40_000
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 internal class MainViewModel(
     private val appContext: Context,
     private val repository: PlaylistRepository,
@@ -33,6 +37,10 @@ internal class MainViewModel(
     private val lastPlaylistStore: LastPlaylistStore,
     private val networkMonitor: NetworkMonitor
 ) : ViewModel() {
+
+    init {
+        PlaybackTrace.enabled = appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+    }
 
     private val initialEpgSettings = lastPlaylistStore.readEpgSettings()
     private val initialXtreamKeepAliveSettings = lastPlaylistStore.readXtreamKeepAliveSettings()
@@ -56,20 +64,31 @@ internal class MainViewModel(
     private var channelsByGroupId: Map<String, List<ChannelListEntry>> = emptyMap()
     private var continuousPlayOriginalIndices: List<Int> = emptyList()
     private var cachedGroups: List<ChannelGroup> = emptyList()
-    private var filteredIndexByOriginalIndex: Map<Int, Int> = emptyMap()
     private var browserRootPaths: Set<String> = emptySet()
     private var filterJob: Job? = null
-    private var epgRefreshJob: Job? = null
+    private var epgTickerJob: Job? = null
+    private val playlistLoads = LatestTask(viewModelScope)
+    private val epgLoads = LatestTask(viewModelScope)
+    private val browserLoads = LatestTask(viewModelScope)
     private var xtreamKeepAliveJob: Job? = null
     private var epgTimelinesByKey: Map<String, List<CurrentProgram>> = emptyMap()
     private var xtreamKeepAliveSignature: String? = null
+    private var playbackRequestVersion = 0L
     private var consecutivePlaybackFailures = 0
     private val backendFallbackThreshold = 3
+    private val playbackFallback = PlaybackFallbackPolicy()
 
     val isNetworkAvailable: StateFlow<Boolean> = networkMonitor.isConnected
 
     private val _storageInfo = MutableStateFlow(StorageInfo.Empty)
     val storageInfo: StateFlow<StorageInfo> = _storageInfo.asStateFlow()
+    private val storageMutex = Mutex()
+    private var storageRefreshJob: Job? = null
+    private val _maintenanceMessage = MutableStateFlow("")
+    val maintenanceMessage = _maintenanceMessage.asStateFlow()
+    private val _maintenanceBusy = MutableStateFlow(false)
+    val maintenanceBusy = _maintenanceBusy.asStateFlow()
+
 
     init {
         networkMonitor.start()
@@ -89,6 +108,26 @@ internal class MainViewModel(
                     }
                 }
                 wasConnected = connected
+            }
+        }
+        viewModelScope.launch {
+            PlaybackCache.cleanup.collect { result ->
+                if (result != null) {
+                    showMaintenanceMessage("Reproducción: ${result.label()}")
+                    if (!_maintenanceBusy.value) refreshStorageInfo()
+                }
+            }
+        }
+        viewModelScope.launch {
+            ImageLoaderConfig.cleanup.collect { result ->
+                if (result != null) {
+                    showMaintenanceMessage("Imágenes: ${result.label()}")
+                    if (!_maintenanceBusy.value) refreshStorageInfo()
+                    while (ImageLoaderConfig.cleanup.value?.status == CleanupStatus.PENDING) {
+                        delay(1_000)
+                        withContext(Dispatchers.IO) { ImageLoaderConfig.checkPendingCleanup() }
+                    }
+                }
             }
         }
         restoreLastPlaylist()
@@ -158,6 +197,7 @@ internal class MainViewModel(
     }
 
     fun closeFileBrowser() {
+        browserLoads.cancel()
         _uiState.value = _uiState.value.copy(
             currentScreen = AppScreen.MAIN,
             isFileBrowserLoading = false
@@ -172,15 +212,16 @@ internal class MainViewModel(
     }
 
     fun loadFileBrowserRoots(context: Context) {
-        viewModelScope.launch {
+        browserLoads.launch { request ->
             _uiState.value = _uiState.value.copy(
                 currentScreen = AppScreen.FILE_BROWSER,
                 isFileBrowserLoading = true,
                 fileBrowserStatus = "Cargando ubicaciones..."
             )
 
-            runCatching { fileBrowserRepository.listRoots(context) }
+            runCatchingCancellable { fileBrowserRepository.listRoots(context) }
                 .onSuccess { entries ->
+                    request.ensureCurrent()
                     browserRootPaths = entries.map { it.path }.toSet()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserEntries = entries,
@@ -195,6 +236,7 @@ internal class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserEntries = emptyList(),
                         fileBrowserCurrentPath = null,
@@ -207,15 +249,16 @@ internal class MainViewModel(
     }
 
     fun openFileBrowserDirectory(path: String) {
-        viewModelScope.launch {
+        browserLoads.launch { request ->
             _uiState.value = _uiState.value.copy(
                 currentScreen = AppScreen.FILE_BROWSER,
                 isFileBrowserLoading = true,
                 fileBrowserStatus = "Abriendo carpeta..."
             )
 
-            runCatching { fileBrowserRepository.listDirectory(path) }
+            runCatchingCancellable { fileBrowserRepository.listDirectory(path) }
                 .onSuccess { entries ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserEntries = entries,
                         fileBrowserCurrentPath = path,
@@ -229,6 +272,7 @@ internal class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         fileBrowserStatus = "No se pudo abrir la carpeta: ${error.message}",
                         isFileBrowserLoading = false,
@@ -245,7 +289,7 @@ internal class MainViewModel(
             return
         }
 
-        val currentFile = runCatching { File(currentPath).canonicalFile }.getOrNull()
+        val currentFile = runCatchingCancellable { File(currentPath).canonicalFile }.getOrNull()
         val canonicalCurrentPath = currentFile?.absolutePath
 
         if (canonicalCurrentPath == null || canonicalCurrentPath in browserRootPaths) {
@@ -273,7 +317,7 @@ internal class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             lastPlaylistStore.saveSelectedGroupId(groupId)
         }
-        // Group switches use a prebuilt index; apply on the main thread for instant UI.
+        // Unsearched groups reuse ordered lists; selection lookup does not build a global map.
         scheduleFiltering(immediate = true, preferSync = true)
     }
 
@@ -306,7 +350,8 @@ internal class MainViewModel(
         if (
             _uiState.value.selectedIndex == index &&
             _uiState.value.controlsVisible &&
-            !keepContinuousPlay
+            !keepContinuousPlay &&
+            !_uiState.value.playbackMessageIsError
         ) {
             return
         }
@@ -319,12 +364,16 @@ internal class MainViewModel(
             clearContinuousPlay(updateState = false)
         }
 
+        val newRequest = index != _uiState.value.selectedIndex || _uiState.value.playbackMessageIsError
+        if (newRequest) { consecutivePlaybackFailures = 0; playbackFallback.resetRequest() }
+        if (newRequest) PlaybackTrace(playbackRequestVersion + 1, "CONTROLLER").event(PlaybackEvent.SELECTED)
         val channel = _uiState.value.channels[index]
         val continuousActive = keepContinuousPlay && continuousPlayOriginalIndices.isNotEmpty()
         val remaining = if (continuousActive) continuousPlayRemainingFrom(index) else 0
         _uiState.value = _uiState.value.copy(
+            playbackRequestId = if (newRequest) ++playbackRequestVersion else _uiState.value.playbackRequestId,
             selectedIndex = index,
-            selectedVisibleIndex = filteredIndexByOriginalIndex[index] ?: -1,
+            selectedVisibleIndex = findVisibleChannelIndex(_uiState.value.filteredChannels, index),
             controlsVisible = true,
             status = "Abriendo: ${channel.name}",
             playbackMessage = if (continuousActive) {
@@ -390,7 +439,8 @@ internal class MainViewModel(
         _uiState.value = _uiState.value.copy(watchedIds = updated)
     }
 
-    fun onPlaybackEnded(channelName: String) {
+    fun onPlaybackEnded(channelName: String, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
         val finishedIndex = _uiState.value.selectedIndex
         if (finishedIndex >= 0) {
             markWatched(finishedIndex)
@@ -476,8 +526,10 @@ internal class MainViewModel(
 
     fun setPlaybackBackend(backend: PlaybackBackend) {
         if (_uiState.value.playbackBackend == backend) return
+        playbackFallback.resetRequest()
         lastPlaylistStore.savePlaybackBackend(backend)
         _uiState.value = _uiState.value.copy(
+            playbackRequestId = ++playbackRequestVersion,
             playbackBackend = backend,
             controlsVisible = true,
             playbackMessage = "Backend: ${backend.displayName()}",
@@ -546,19 +598,20 @@ internal class MainViewModel(
             return
         }
 
-        epgRefreshJob?.cancel()
-        viewModelScope.launch {
+        epgTickerJob?.cancel()
+        epgLoads.launch { request ->
             _uiState.value = _uiState.value.copy(
                 isEpgLoading = true,
                 epgStatus = "Cargando EPG…"
             )
 
-            runCatching {
+            runCatchingCancellable {
                 epgRepository.loadProgramTimelines(
                     epgUrl = settings.url,
-                    channels = _uiState.value.channels
+                    channels = state.channels
                 )
             }.onSuccess { timelines ->
+                request.ensureCurrent()
                 epgTimelinesByKey = timelines
                 val nowMillis = System.currentTimeMillis()
                 val currentPrograms = resolveCurrentPrograms(nowMillis)
@@ -575,6 +628,7 @@ internal class MainViewModel(
                 )
                 startEpgTicker()
             }.onFailure { error ->
+                request.ensureCurrent()
                 clearEpgState("Error EPG: ${error.message}")
             }
         }
@@ -595,7 +649,8 @@ internal class MainViewModel(
         )
     }
 
-    fun onPlaybackStarted(channelName: String) {
+    fun onPlaybackStarted(channelName: String, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
         consecutivePlaybackFailures = 0
         _uiState.value = _uiState.value.copy(
             status = "Reproduciendo: $channelName",
@@ -606,7 +661,8 @@ internal class MainViewModel(
         restartXtreamKeepAliveIfNeeded(forceRestart = true)
     }
 
-    fun onPlaybackReconnectScheduled(channelName: String) {
+    fun onPlaybackReconnectScheduled(channelName: String, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
         _uiState.value = _uiState.value.copy(
             status = "Reconectando: $channelName",
             playbackMessage = "Reconectando la emisión... un poco de paciencia...",
@@ -616,14 +672,12 @@ internal class MainViewModel(
         )
     }
 
-    fun onPlaybackError(channelName: String, detail: String?) {
-        val selected = _uiState.value.channels.getOrNull(_uiState.value.selectedIndex)
-        val isXtream = selected?.let { isXtreamStreamUrl(it.playbackUrl) } == true
-        // Keep Xtream session alive during reconnect attempts; only stop for non-Xtream.
-        if (!isXtream) {
-            stopXtreamKeepAlive()
-        }
-        consecutivePlaybackFailures++
+    fun onPlaybackError(channelName: String, failure: PlaybackFailure, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
+        // This callback is terminal. Keep-alive remains active during scheduled
+        // retries, but must not retain a provider slot after recovery is exhausted.
+        stopXtreamKeepAlive()
+        consecutivePlaybackFailures += failure.failures.coerceAtLeast(1)
 
         val currentBackend = _uiState.value.playbackBackend
         val alternativeBackend = when (currentBackend) {
@@ -631,14 +685,16 @@ internal class MainViewModel(
             PlaybackBackend.EXOPLAYER -> PlaybackBackend.VLC
         }
 
-        val errorMessage = detail?.takeIf { it.isNotBlank() } ?: "No se pudo reproducir este canal"
+        val errorMessage = failure.detail?.takeIf { it.isNotBlank() } ?: "No se pudo reproducir este canal"
 
-        if (consecutivePlaybackFailures >= backendFallbackThreshold) {
+        if (playbackFallback.acquire(consecutivePlaybackFailures, backendFallbackThreshold, failure.allowBackendFallback)) {
+            PlaybackTrace(playbackRequestVersion + 1, alternativeBackend.name).event(PlaybackEvent.FALLBACK)
             consecutivePlaybackFailures = 0
             val fallbackMessage = "$errorMessage · Cambiando a ${alternativeBackend.displayName()} automáticamente"
             lastPlaylistStore.savePlaybackBackend(alternativeBackend)
             _uiState.value = _uiState.value.copy(
                 status = "Fallback: $channelName → ${alternativeBackend.displayName()}",
+                playbackRequestId = ++playbackRequestVersion,
                 playbackBackend = alternativeBackend,
                 playbackMessage = fallbackMessage,
                 playbackMessageIsError = true,
@@ -657,10 +713,12 @@ internal class MainViewModel(
     }
 
     fun prepareForBackgroundExit() {
+        cancelSessionTasks()
         stopXtreamKeepAlive()
         val currentState = _uiState.value
         _uiState.value = currentState.copy(
             currentScreen = AppScreen.MAIN,
+            playbackRequestId = ++playbackRequestVersion,
             selectedIndex = -1,
             selectedVisibleIndex = -1,
             isFullscreen = false,
@@ -696,6 +754,7 @@ internal class MainViewModel(
 
     fun openMain() {
         if (_uiState.value.currentScreen == AppScreen.MAIN) return
+        browserLoads.cancel()
         _uiState.value = _uiState.value.copy(currentScreen = AppScreen.MAIN)
     }
 
@@ -828,7 +887,9 @@ internal class MainViewModel(
         restoring: Boolean,
         preferredGroupId: String
     ) {
-        viewModelScope.launch {
+        playlistLoads.launch { request ->
+            filterJob?.cancel()
+            clearEpgState(_uiState.value.epgSettings.statusLabel())
             _uiState.value = _uiState.value.copy(
                 playlistSource = source,
                 currentScreen = AppScreen.MAIN,
@@ -838,16 +899,19 @@ internal class MainViewModel(
                 playbackMessageIsError = false
             )
 
-            runCatching { repository.loadFromUrl(url) }
+            runCatchingCancellable { repository.loadFromUrl(url) }
                 .onSuccess { channels ->
+                    request.ensureCurrent()
                     applyLoadedChannels(
                         channels = channels,
                         messagePrefix = if (restoring) "Lista recuperada" else "Lista cargada",
                         source = source,
-                        preferredGroupId = preferredGroupId
+                        preferredGroupId = preferredGroupId,
+                        request = request
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         playlistSource = source,
                         status = if (restoring) {
@@ -868,7 +932,9 @@ internal class MainViewModel(
         restoring: Boolean,
         preferredGroupId: String
     ) {
-        viewModelScope.launch {
+        playlistLoads.launch { request ->
+            filterJob?.cancel()
+            clearEpgState(_uiState.value.epgSettings.statusLabel())
             _uiState.value = _uiState.value.copy(
                 playlistSource = source,
                 currentScreen = AppScreen.MAIN,
@@ -878,16 +944,19 @@ internal class MainViewModel(
                 playbackMessageIsError = false
             )
 
-            runCatching { repository.loadFromUri(appContext, uri) }
+            runCatchingCancellable { repository.loadFromUri(appContext, uri) }
                 .onSuccess { channels ->
+                    request.ensureCurrent()
                     applyLoadedChannels(
                         channels = channels,
                         messagePrefix = if (restoring) "Archivo recuperado" else "Archivo cargado",
                         source = source,
-                        preferredGroupId = preferredGroupId
+                        preferredGroupId = preferredGroupId,
+                        request = request
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         playlistSource = source,
                         status = if (restoring) {
@@ -908,7 +977,9 @@ internal class MainViewModel(
         restoring: Boolean,
         preferredGroupId: String
     ) {
-        viewModelScope.launch {
+        playlistLoads.launch { request ->
+            filterJob?.cancel()
+            clearEpgState(_uiState.value.epgSettings.statusLabel())
             _uiState.value = _uiState.value.copy(
                 playlistSource = source,
                 currentScreen = if (restoring) AppScreen.MAIN else _uiState.value.currentScreen,
@@ -919,13 +990,15 @@ internal class MainViewModel(
                 playbackMessageIsError = false
             )
 
-            runCatching { repository.loadFromFile(file) }
+            runCatchingCancellable { repository.loadFromFile(file) }
                 .onSuccess { channels ->
+                    request.ensureCurrent()
                     applyLoadedChannels(
                         channels = channels,
                         messagePrefix = if (restoring) "Archivo recuperado" else "Archivo cargado",
                         source = source,
-                        preferredGroupId = preferredGroupId
+                        preferredGroupId = preferredGroupId,
+                        request = request
                     )
                     _uiState.value = _uiState.value.copy(
                         currentScreen = AppScreen.MAIN,
@@ -933,6 +1006,7 @@ internal class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    request.ensureCurrent()
                     _uiState.value = _uiState.value.copy(
                         playlistSource = source,
                         status = if (restoring) {
@@ -953,32 +1027,47 @@ internal class MainViewModel(
         channels: List<Channel>,
         messagePrefix: String,
         source: PlaylistSource,
-        preferredGroupId: String
+        preferredGroupId: String,
+        request: LatestTask.Request
     ) {
-        stopXtreamKeepAlive()
-        val currentState = _uiState.value
-        val favoriteIds = currentState.favoriteIds
-        val favoriteGroupIds = currentState.favoriteGroupIds
-        val prepared = withContext(Dispatchers.Default) {
-            prepareLoadedChannels(
-                channels = channels,
-                favoriteIds = favoriteIds,
-                favoriteGroupIds = favoriteGroupIds,
-                preferredGroupId = preferredGroupId,
-                searchQuery = currentState.searchQuery
-            )
+        var snapshot = _uiState.value
+        var targetGroupId = preferredGroupId
+        var prepared: PreparedChannels
+        while (true) {
+            request.ensureCurrent()
+            val context = currentCoroutineContext()
+            prepared = withContext(Dispatchers.Default) {
+                prepareLoadedChannels(
+                    channels = channels,
+                    favoriteIds = snapshot.favoriteIds,
+                    favoriteGroupIds = snapshot.favoriteGroupIds,
+                    preferredGroupId = targetGroupId,
+                    searchQuery = snapshot.searchQuery,
+                    checkCancelled = { context.ensureActive() }
+                )
+            }
+            request.ensureCurrent()
+            val latest = _uiState.value
+            if (snapshot.favoriteIds == latest.favoriteIds &&
+                snapshot.favoriteGroupIds == latest.favoriteGroupIds &&
+                snapshot.searchQuery == latest.searchQuery &&
+                snapshot.selectedGroupId == latest.selectedGroupId) break
+            if (snapshot.selectedGroupId != latest.selectedGroupId) targetGroupId = latest.selectedGroupId
+            snapshot = latest
         }
-
+        filterJob?.cancel()
+        stopXtreamKeepAlive()
+        consecutivePlaybackFailures = 0
+        playbackFallback.resetRequest()
         indexedChannels = prepared.indexedChannels
         channelsByGroupId = prepared.channelsByGroupId
         cachedGroups = prepared.groups
-        filteredIndexByOriginalIndex = emptyMap()
-        filteredIndexByOriginalIndex = prepared.filterResult.indexByOriginalIndex
         continuousPlayOriginalIndices = emptyList()
         lastPlaylistStore.saveSource(source)
         lastPlaylistStore.saveSelectedGroupId(prepared.resolvedGroupId)
 
         _uiState.value = _uiState.value.copy(
+            playbackRequestId = ++playbackRequestVersion,
             channels = channels,
             filteredChannels = prepared.filterResult.filteredChannels,
             groups = prepared.groups,
@@ -1010,7 +1099,6 @@ internal class MainViewModel(
         if (indexedChannels.isEmpty()) {
             cachedGroups = emptyList()
             channelsByGroupId = emptyMap()
-            filteredIndexByOriginalIndex = emptyMap()
             _uiState.value = _uiState.value.copy(
                 filteredChannels = emptyList(),
                 groups = emptyList(),
@@ -1026,6 +1114,9 @@ internal class MainViewModel(
         val favoriteIdsSnapshot = _uiState.value.favoriteIds
         val favoriteGroupIdsSnapshot = _uiState.value.favoriteGroupIds
         val channelsSnapshot = _uiState.value.channels
+        val entriesSnapshot = indexedChannels
+        val byGroupSnapshot = channelsByGroupId
+        val groupsSnapshot = cachedGroups
         val selectedIndexSnapshot = _uiState.value.selectedIndex
         val canApplySync =
             preferSync &&
@@ -1033,17 +1124,18 @@ internal class MainViewModel(
                 selectedGroupIdSnapshot != FavoriteChannelsGroupId
 
         fun applyFilterResult(filterResult: FilterResult, latestState: UiState = _uiState.value) {
-            filteredIndexByOriginalIndex = filterResult.indexByOriginalIndex
             _uiState.value = latestState.copy(
                 filteredChannels = filterResult.filteredChannels,
                 groups = filterResult.groups,
-                selectedIndex = filterResult.selectedIndex,
-                selectedVisibleIndex = filterResult.selectedVisibleIndex
+                selectedIndex = latestState.selectedIndex,
+                selectedVisibleIndex = visibleIndexForSelection(
+                    latestState.selectedIndex, filterResult.filteredChannels
+                )
             )
         }
 
         if (canApplySync) {
-            applyFilterResult(
+            applyFilterResult(NavigationDiagnostics.measureWork("filter.sync") {
                 computeFilterResult(
                     entries = indexedChannels,
                     channelsByGroupId = channelsByGroupId,
@@ -1055,26 +1147,30 @@ internal class MainViewModel(
                     groups = cachedGroups,
                     preservePlaybackSelection = true
                 )
-            )
+            })
             return
         }
 
         filterJob = viewModelScope.launch {
             if (!immediate) delay(SearchDebounceMillis)
 
-            val filterResult = runCatching {
+            val context = currentCoroutineContext()
+            val filterResult = runCatchingCancellable {
                 withContext(Dispatchers.Default) {
-                    computeFilterResult(
-                        entries = indexedChannels,
-                        channelsByGroupId = channelsByGroupId,
-                        selectedGroupId = selectedGroupIdSnapshot,
-                        searchQuery = querySnapshot,
-                        favoriteIds = favoriteIdsSnapshot,
-                        favoriteGroupIds = favoriteGroupIdsSnapshot,
-                        selectedIndex = selectedIndexSnapshot,
-                        groups = cachedGroups,
-                        preservePlaybackSelection = true
-                    )
+                    NavigationDiagnostics.measureWork("filter.async") {
+                        computeFilterResult(
+                            entries = entriesSnapshot,
+                            channelsByGroupId = byGroupSnapshot,
+                            selectedGroupId = selectedGroupIdSnapshot,
+                            searchQuery = querySnapshot,
+                            favoriteIds = favoriteIdsSnapshot,
+                            favoriteGroupIds = favoriteGroupIdsSnapshot,
+                            selectedIndex = selectedIndexSnapshot,
+                            groups = groupsSnapshot,
+                            preservePlaybackSelection = true,
+                            checkCancelled = { context.ensureActive() }
+                        )
+                    }
                 }
             }.getOrElse { return@launch }
 
@@ -1115,7 +1211,8 @@ internal class MainViewModel(
     }
 
     private fun clearEpgState(status: String) {
-        epgRefreshJob?.cancel()
+        epgLoads.cancel()
+        epgTickerJob?.cancel()
         epgTimelinesByKey = emptyMap()
         _uiState.value = _uiState.value.copy(
             currentPrograms = emptyMap(),
@@ -1126,10 +1223,10 @@ internal class MainViewModel(
     }
 
     private fun startEpgTicker() {
-        epgRefreshJob?.cancel()
+        epgTickerJob?.cancel()
         if (epgTimelinesByKey.isEmpty()) return
 
-        epgRefreshJob = viewModelScope.launch {
+        epgTickerJob = viewModelScope.launch {
             while (true) {
                 delay(EpgRefreshIntervalMillis)
                 val nowMillis = System.currentTimeMillis()
@@ -1174,6 +1271,7 @@ internal class MainViewModel(
 
     private fun openAuxiliaryScreen(screen: AppScreen) {
         if (_uiState.value.currentScreen == screen) return
+        browserLoads.cancel()
         _uiState.value = _uiState.value.copy(
             currentScreen = screen,
             isFullscreen = false,
@@ -1229,113 +1327,101 @@ internal class MainViewModel(
         xtreamKeepAliveSignature = null
     }
 
-    @UnstableApi
-    fun clearPlaybackCache() {
-        viewModelScope.launch(Dispatchers.IO) {
-            PlaybackCache.releaseAndClear(appContext)
-            refreshStorageInfo()
-        }
-        showMaintenanceMessage("Caché de reproducción limpiada")
+    fun clearPlaybackCache() = performMaintenance {
+        "Reproducción: ${PlaybackCache.requestClear(appContext).label()}"
     }
 
-    fun clearImageCache() {
-        viewModelScope.launch(Dispatchers.IO) {
-            ImageLoaderConfig.clearAllCaches(appContext)
-            refreshStorageInfo()
-        }
-        showMaintenanceMessage("Caché de imágenes limpiada")
+    fun clearImageCache() = performMaintenance {
+        "Imágenes: ${ImageLoaderConfig.clearForMaintenance(appContext).label()}"
     }
 
-    @UnstableApi
-    fun clearAllCache() {
+    fun clearAllCache() = performMaintenance { clearCacheCategories() }
+
+    private fun clearCacheCategories(): String {
+        val playback = PlaybackCache.requestClear(appContext)
+        val images = ImageLoaderConfig.clearForMaintenance(appContext)
+        val temporary = CacheFiles().clear(appContext.cacheDir, OwnedCacheDirectories)
+        return "Reproducción: ${playback.label()}\nImágenes: ${images.label()}\nTemporales: ${temporary.label()}"
+    }
+
+    private fun performMaintenance(operation: () -> String) {
+        if (_maintenanceBusy.value) return
+        _maintenanceBusy.value = true
+        _maintenanceMessage.value = "Mantenimiento en curso…"
         viewModelScope.launch(Dispatchers.IO) {
-            PlaybackCache.releaseAndClear(appContext)
-            ImageLoaderConfig.clearAllCaches(appContext)
-            clearGeneralAppCache()
-            refreshStorageInfo()
+            try {
+                storageMutex.withLock {
+                    val message = try { operation() } catch (_: Exception) { "Error de mantenimiento; operación no completada" }
+                    val snapshot = storageSnapshot()
+                    currentCoroutineContext().ensureActive()
+                    _storageInfo.value = snapshot
+                    showMaintenanceMessage(message)
+                }
+            } finally { _maintenanceBusy.value = false }
         }
-        showMaintenanceMessage("Todo el caché ha sido limpiado")
     }
 
     fun resetPreferences() {
+        cancelSessionTasks()
         lastPlaylistStore.clearAll()
-        val clearedState = UiState()
+        val clearedState = UiState(playbackRequestId = ++playbackRequestVersion)
         _uiState.value = clearedState
         indexedChannels = emptyList()
         channelsByGroupId = emptyMap()
         cachedGroups = emptyList()
-        filteredIndexByOriginalIndex = emptyMap()
         continuousPlayOriginalIndices = emptyList()
         epgTimelinesByKey = emptyMap()
         stopXtreamKeepAlive()
-        epgRefreshJob?.cancel()
+        epgTickerJob?.cancel()
         showMaintenanceMessage("Preferencias restablecidas")
     }
 
-    @UnstableApi
     fun resetApp() {
-        viewModelScope.launch(Dispatchers.IO) {
-            PlaybackCache.releaseAndClear(appContext)
-            ImageLoaderConfig.clearAllCaches(appContext)
-            clearGeneralAppCache()
-        }
+        if (_maintenanceBusy.value) return
+        // Only reached after the existing explicit destructive confirmation.
         resetPreferences()
-        refreshStorageInfo()
-        showMaintenanceMessage("Aplicación restablecida por completo")
+        performMaintenance { "Preferencias restablecidas.\n${clearCacheCategories()}" }
     }
 
-    @UnstableApi
+    private fun storageSnapshot(): StorageInfo = try { readCacheStorage(appContext.cacheDir) }
+        catch (_: Exception) { StorageInfo(StorageSize.Error, StorageSize.Error, StorageSize.Error) }
+
     fun refreshStorageInfo() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val playbackCacheSize = PlaybackCache.cacheSizeBytes(appContext)
-            val imageCacheSize = ImageLoaderConfig.diskCacheSizeBytes(appContext)
-            val appCacheSize = calculateAppCacheSize()
-            _storageInfo.value = StorageInfo(
-                playbackCacheBytes = playbackCacheSize,
-                imageCacheBytes = imageCacheSize,
-                appCacheBytes = appCacheSize,
-                totalBytes = playbackCacheSize + imageCacheSize + appCacheSize
-            )
-        }
-    }
-
-    private fun calculateAppCacheSize(): Long {
-        val cacheDir = appContext.cacheDir ?: return 0L
-        return cacheDir.walkTopDown()
-            .filter { it.isFile }
-            .filter { !it.absolutePath.contains("media_stream_cache") }
-            .filter { !it.absolutePath.contains("coil_image_cache") }
-            .sumOf { it.length() }
-    }
-
-    private fun clearGeneralAppCache() {
-        val cacheDir = appContext.cacheDir ?: return
-        cacheDir.listFiles()?.forEach { file ->
-            if (file.name != "media_stream_cache" && file.name != "coil_image_cache") {
-                file.deleteRecursively()
+        storageRefreshJob?.cancel()
+        _storageInfo.value = StorageInfo.Empty
+        storageRefreshJob = viewModelScope.launch(Dispatchers.IO) {
+            storageMutex.withLock {
+                val snapshot = storageSnapshot()
+                currentCoroutineContext().ensureActive()
+                _storageInfo.value = snapshot
             }
         }
     }
 
     private fun showMaintenanceMessage(message: String) {
-        _uiState.value = _uiState.value.copy(
-            playbackMessage = message,
-            playbackMessageIsError = false,
-            controlsVisible = true
-        )
+        _maintenanceMessage.value = message
+    }
+
+    private fun cancelSessionTasks() {
+        playlistLoads.cancel()
+        epgLoads.cancel()
+        browserLoads.cancel()
+        filterJob?.cancel()
+        epgTickerJob?.cancel()
+        stopXtreamKeepAlive()
     }
 
     override fun onCleared() {
+        cancelSessionTasks()
         stopXtreamKeepAlive()
         networkMonitor.stop()
-        epgRefreshJob?.cancel()
+        epgTickerJob?.cancel()
         filterJob?.cancel()
         super.onCleared()
     }
 
     private data class FilterResult(
         val filteredChannels: List<ChannelListEntry>,
-        val indexByOriginalIndex: Map<Int, Int>,
         val selectedIndex: Int,
         val selectedVisibleIndex: Int,
         val groups: List<ChannelGroup>
@@ -1354,16 +1440,18 @@ internal class MainViewModel(
         favoriteIds: Set<String>,
         favoriteGroupIds: Set<String>,
         preferredGroupId: String,
-        searchQuery: String
+        searchQuery: String,
+        checkCancelled: () -> Unit = {}
     ): PreparedChannels {
         val indexedEntries = channels.mapIndexed { index, channel ->
+            if (index and 255 == 0) checkCancelled()
             ChannelListEntry(
                 originalIndex = index,
                 channel = channel
             )
         }
-        val byGroupId = buildChannelsByGroupId(indexedEntries)
-        val groups = buildChannelGroups(indexedEntries, favoriteIds, favoriteGroupIds)
+        val byGroupId = buildChannelsByGroupId(indexedEntries, checkCancelled)
+        val groups = buildChannelGroups(indexedEntries, favoriteIds, favoriteGroupIds, checkCancelled)
         val resolvedGroupId = resolveGroupId(preferredGroupId, groups)
         return PreparedChannels(
             indexedChannels = indexedEntries,
@@ -1379,7 +1467,8 @@ internal class MainViewModel(
                 favoriteGroupIds = favoriteGroupIds,
                 selectedIndex = -1,
                 groups = groups,
-                preservePlaybackSelection = false
+                preservePlaybackSelection = false,
+                checkCancelled = checkCancelled
             )
         )
     }
@@ -1393,11 +1482,15 @@ internal class MainViewModel(
         favoriteGroupIds: Set<String>,
         selectedIndex: Int,
         groups: List<ChannelGroup>,
-        preservePlaybackSelection: Boolean
+        preservePlaybackSelection: Boolean,
+        checkCancelled: () -> Unit = {}
     ): FilterResult {
+        checkCancelled()
+        var checked = 0
         val groupFiltered = when (selectedGroupId) {
             AllChannelsGroupId -> entries
             FavoriteChannelsGroupId -> entries.filter {
+                if (checked++ and 255 == 0) checkCancelled()
                 isChannelEntryFavorite(it, favoriteIds, favoriteGroupIds)
             }
             else -> channelsByGroupId[selectedGroupId].orEmpty()
@@ -1407,15 +1500,13 @@ internal class MainViewModel(
             groupFiltered
         } else {
             groupFiltered.filter { entry ->
+                if (checked++ and 255 == 0) checkCancelled()
                 entry.channel.name.contains(searchQuery, ignoreCase = true) ||
                     entry.groupTitle.contains(searchQuery, ignoreCase = true)
             }
         }
 
-        val indexMap = HashMap<Int, Int>(filteredChannels.size.coerceAtLeast(16))
-        filteredChannels.forEachIndexed { visibleIndex, entry ->
-            indexMap[entry.originalIndex] = visibleIndex
-        }
+        val selectedPosition = findVisibleChannelIndex(filteredChannels, selectedIndex)
 
         val resolvedSelectedIndex = when {
             selectedIndex < 0 -> if (!preservePlaybackSelection && filteredChannels.isNotEmpty()) {
@@ -1423,24 +1514,17 @@ internal class MainViewModel(
             } else {
                 selectedIndex
             }
-            indexMap.containsKey(selectedIndex) -> selectedIndex
+            selectedPosition >= 0 -> selectedIndex
             // Keep current playback when browsing another group; only auto-pick on initial load.
             preservePlaybackSelection -> selectedIndex
             filteredChannels.isNotEmpty() -> filteredChannels.first().originalIndex
             else -> -1
         }
 
-        val selectedVisibleIndex = indexMap[resolvedSelectedIndex]
-            ?: if (filteredChannels.isNotEmpty() && !indexMap.containsKey(selectedIndex)) {
-                // Focus the top of the new group list without changing playback.
-                0
-            } else {
-                -1
-            }
+        val selectedVisibleIndex = visibleIndexForSelection(resolvedSelectedIndex, filteredChannels)
 
         return FilterResult(
             filteredChannels = filteredChannels,
-            indexByOriginalIndex = indexMap,
             selectedIndex = resolvedSelectedIndex,
             selectedVisibleIndex = selectedVisibleIndex,
             groups = groups
@@ -1448,7 +1532,7 @@ internal class MainViewModel(
     }
 
     companion object {
-        @UnstableApi
+        @androidx.annotation.OptIn(UnstableApi::class)
         internal fun factory(applicationContext: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {

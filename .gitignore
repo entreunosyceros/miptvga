@@ -17,10 +17,6 @@ output-metadata.json
 **/test-results/
 **/reports/
 
-# source code
-**/src/test/**
-**/src/androidTest/**
-
 # Local Android SDK configuración
 local.properties
 
@@ -32,3 +28,31 @@ keystore.properties.*
 *.keystore
 keystore/
 
+
+# Configuración privada de este equipo y estado de herramientas
+/.idea/
+/.agents/
+/.aws/
+/.recovery/
+/.env
+/.env.local
+/.env.*.local
+
+# Informes y material de investigación local (conservar físicamente)
+/AUDITORIA_MIPTVGA.md
+/AUDITORIA_ZAPPING.md
+/MANTENIMIENTO_VALIDACION.md
+/PREPARACION_GITHUB_LOCAL.md
+/docs/VALIDACION_USUARIO_FASES1_2.md
+/docs/auditoria/
+/docs/fase1/
+/docs/fase2/
+
+# Diagnóstico experimental de zapping; las demás pruebas sí se publican
+/app/src/androidTest/java/com/toigo/miptvga/ZappingPlaybackTest.kt
+
+# Logs y temporales sueltos de la raíz; no excluir fixtures del proyecto
+/*.log
+/*.log.*
+/*.tmp
+/*~

@@ -26,10 +26,10 @@ private const val DefaultUnnamedChannel = "Canal sin nombre"
 
 internal class M3uParser {
     fun parse(content: String): List<Channel> {
-        return content.reader().buffered().use(::parse)
+        return content.reader().buffered().use { parse(it) }
     }
 
-    fun parse(reader: BufferedReader): List<Channel> {
+    fun parse(reader: BufferedReader, checkCancelled: () -> Unit = {}): List<Channel> {
         val result = ArrayList<Channel>(InitialChannelCapacity)
         var pendingName: String? = null
         var pendingGroup: String? = null
@@ -37,7 +37,9 @@ internal class M3uParser {
         var pendingTvgId: String? = null
         var pendingHeaders: Map<String, String> = emptyMap()
 
+        var lineCount = 0
         while (true) {
+            if (lineCount++ and 255 == 0) checkCancelled()
             val rawLine = reader.readLine() ?: break
             val line = rawLine.trim().trimStart('\uFEFF')
             if (line.isEmpty()) continue
@@ -46,7 +48,7 @@ internal class M3uParser {
                 pendingGroup = extractGroupTitle(line)
                 pendingLogoUrl = extractLogoUrl(line)
                 pendingTvgId = extractTvgId(line)
-                pendingName = line.substringAfterLast(',').trim().ifBlank { DefaultUnnamedChannel }
+                pendingName = extractChannelName(line)
                 pendingHeaders = emptyMap()
             } else if (line.startsWith(ExtVlcOptMarker, ignoreCase = true)) {
                 extractHeaderFromVlcOpt(line)?.let { (name, value) ->
@@ -79,7 +81,21 @@ internal class M3uParser {
             }
         }
 
+        checkCancelled()
         return result
+    }
+
+    // EXTINF's separator is the first comma outside quoted attributes. The display
+    // name is the entire remainder, including any subsequent commas.
+    private fun extractChannelName(line: String): String {
+        var quoted = false
+        line.forEachIndexed { index, char ->
+            if (char == '"') quoted = !quoted
+            if (char == ',' && !quoted) {
+                return line.substring(index + 1).trim().ifBlank { DefaultUnnamedChannel }
+            }
+        }
+        return DefaultUnnamedChannel
     }
 
     private fun extractGroupTitle(line: String): String? {

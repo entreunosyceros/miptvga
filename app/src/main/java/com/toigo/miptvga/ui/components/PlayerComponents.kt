@@ -1,5 +1,7 @@
 package com.toigo.miptvga.ui.components
 
+import com.toigo.miptvga.PlaybackFailure
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -92,7 +94,7 @@ internal fun playbackTimelineLabel(state: PlaybackControllerState): String {
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun PlayerPanel(
     modifier: Modifier,
@@ -121,7 +123,7 @@ internal fun PlayerPanel(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit = {},
-    onPlaybackError: (String?) -> Unit
+    onPlaybackError: (PlaybackFailure) -> Unit
 ) {
     val fullscreenTransitionToken = remember(selectedChannel?.playbackUrl) { mutableIntStateOf(0) }
     var playbackControllerState by remember(selectedChannel?.playbackUrl, playbackBackend) {
@@ -494,7 +496,7 @@ internal fun PlayerBottomControlsOverlay(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun FullscreenPlayerPanel(
     modifier: Modifier,
@@ -521,7 +523,7 @@ internal fun FullscreenPlayerPanel(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit = {},
-    onPlaybackError: (String?) -> Unit
+    onPlaybackError: (PlaybackFailure) -> Unit
 ) {
     Box(
         modifier = modifier

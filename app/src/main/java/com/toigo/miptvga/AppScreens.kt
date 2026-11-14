@@ -29,7 +29,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -45,6 +50,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -63,10 +69,13 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,8 +84,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -101,6 +114,7 @@ import androidx.media3.common.util.UnstableApi
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.foundation.layout.heightIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.util.Date
 
@@ -112,25 +126,25 @@ private const val AppByline = "app creada por entreunosycero.net"
 private const val SidePanelCompactWidthDp = 320
 private const val SidePanelExpandedWidthDp = 368
 
-private val AppBackgroundColor = Color(0xFF080B10)
-private val PanelColor = Color(0xFF11161D)
+private val AppBackgroundColor = Color(0xFF0D1117)
+private val PanelColor = Color(0xFF151D29)
 private val PanelColorElevated = Color(0xFF1A2230)
 private val PanelBorderColor = Color(0xFF314052)
-private val ChannelRowColor = Color(0xFF121923)
-private val ChannelRowSelectedColor = Color(0xFF1E5C91)
+private val ChannelRowColor = Color(0xFF1B2635)
+private val ChannelRowSelectedColor = Color(0xFF20443E)
 private val ButtonSecondaryColor = Color(0xFF233345)
-private val PrimaryButtonColor = Color(0xFF2F89D5)
-private val SecondaryTextColor = Color(0xFF9AAABD)
+private val PrimaryButtonColor = Color(0xFF226E61)
+private val SecondaryTextColor = Color(0xFFB6C2D1)
 private val MutedTextColor = Color(0xFFDCE5EF)
 private val InputBackgroundColor = Color(0xFF0D1118)
 private val PlayerOverlayColor = Color(0xE60C1016)
 private val StatusChipColor = Color(0xFF18212C)
-private val StatusChipAccentColor = Color(0xFF214F79)
+private val StatusChipAccentColor = Color(0xFF20443E)
 private val SearchStripColor = Color(0xFF10161E)
 private val GroupSectionColor = Color(0xFF0D131B)
-private val FocusHighlightColor = Color(0xFF4DA6FF)
-private val FocusedPrimaryColor = Color(0xFF3A9BE8)
-private val FocusedSecondaryColor = Color(0xFF2A4460)
+private val FocusHighlightColor = Color(0xFFBDF7E8)
+private val FocusedPrimaryColor = Color(0xFF287365)
+private val FocusedSecondaryColor = Color(0xFF29443F)
 private val PanelShape = RoundedCornerShape(4.dp)
 private val ItemShape = RoundedCornerShape(4.dp)
 private val ChipShape = RoundedCornerShape(4.dp)
@@ -522,12 +536,15 @@ private fun createFallbackManageAllFilesIntent(): Intent {
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun RootScreen(vm: MainViewModel) {
     val ui by vm.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    var exitConfirmation by rememberSaveable { mutableStateOf(false) }
+    var focusRestoreToken by remember { mutableIntStateOf(0) }
+    val exitRequester = remember { FocusRequester() }
     val fullscreenActive = ui.currentScreen == AppScreen.MAIN && ui.isFullscreen
     val windowMetrics = rememberAppWindowMetrics()
 
@@ -568,25 +585,46 @@ internal fun RootScreen(vm: MainViewModel) {
             .background(AppBackgroundColor)
             .padding(if (fullscreenActive) PaddingValues(0.dp) else windowMetrics.safePadding)
     ) {
-        when (ui.currentScreen) {
-            AppScreen.ABOUT -> AboutScreen(onBack = vm::openMain)
-            AppScreen.MAIN -> MainScreen(
-                ui = ui,
-                vm = vm,
-                onOpenAbout = vm::openAbout,
-                onOpenSettings = vm::openSettings
-            )
-            AppScreen.FILE_BROWSER -> FileBrowserScreen(ui = ui, vm = vm)
-            AppScreen.SEARCH -> SearchScreen(ui = ui, vm = vm)
-            AppScreen.GUIDE -> GuideScreen(ui = ui, vm = vm)
-            AppScreen.CHANNEL_INFO -> ChannelInfoScreen(ui = ui, vm = vm)
-            AppScreen.SETTINGS -> SettingsScreen(
-                ui = ui,
-                vm = vm,
-                onOpenAbout = vm::openAbout,
-                onExitApp = { (activity as? MainActivity)?.requestAppExit() }
-            )
+        PlaybackScreenHost(
+            showAuxiliary = ui.currentScreen != AppScreen.MAIN,
+            onDismiss = { if (ui.currentScreen == AppScreen.FILE_BROWSER) vm.closeFileBrowser() else vm.openMain() },
+            mainContent = {
+                MainScreen(ui = ui, vm = vm, onOpenAbout = vm::openAbout, onOpenSettings = vm::openSettings,
+                    onRequestExit = { exitConfirmation = true }, exitRequester = exitRequester, focusRestoreToken = focusRestoreToken,
+                    osdBlocked = exitConfirmation || ui.currentScreen != AppScreen.MAIN)
+            },
+            auxiliaryContent = {
+                Box(Modifier.fillMaxSize().background(AppBackgroundColor)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(windowMetrics.safePadding)
+                    .onPreviewKeyEvent { event -> (activity as? MainActivity)?.handleKeyEvent(event.nativeKeyEvent) == true }) {
+                    when (ui.currentScreen) {
+                        AppScreen.ABOUT -> AboutScreen(onBack = vm::openMain)
+                        AppScreen.MAIN -> Unit
+                        AppScreen.FILE_BROWSER -> FileBrowserScreen(ui = ui, vm = vm)
+                        AppScreen.SEARCH -> SearchScreen(ui = ui, vm = vm)
+                        AppScreen.GUIDE -> GuideScreen(ui = ui, vm = vm)
+                        AppScreen.CHANNEL_INFO -> ChannelInfoScreen(ui = ui, vm = vm)
+                        AppScreen.SETTINGS -> SettingsScreen(
+                            ui = ui,
+                            vm = vm,
+                            onOpenAbout = vm::openAbout,
+                            onExitApp = { exitConfirmation = true }
+                        )
+                    }
+                }
+            }
+        )
+        if (exitConfirmation) {
+            ExitConfirmationDialog(onCancel = {
+                exitConfirmation = false
+                if (ui.currentScreen == AppScreen.MAIN) focusRestoreToken++
+            }, onExit = {
+                exitConfirmation = false
+                (activity as? MainActivity)?.requestAppExit()
+            })
         }
+
     }
 }
 
@@ -1111,6 +1149,7 @@ private fun TvGuideProgramPanel(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun GuideRow(
     entry: ChannelListEntry,
     currentProgram: CurrentProgram?,
@@ -1127,6 +1166,7 @@ private fun GuideRow(
     val focusRequester = remember { FocusRequester() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    var showFullName by remember { mutableStateOf(false) }
     val isActive = selected || isFocused
     val currentProgress = remember(currentProgram) {
         currentProgram?.let { program ->
@@ -1150,7 +1190,8 @@ private fun GuideRow(
             .background(if (selected) ChannelRowSelectedColor.copy(alpha = 0.32f) else if (isFocused) PanelColorElevated else ChannelRowColor)
             .border(1.dp, if (isActive) PrimaryButtonColor else PanelBorderColor, ItemShape)
             .focusRequester(focusRequester)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onSelectChannel)
+            .combinedClickable(interactionSource = interactionSource, indication = null,
+                onClick = onSelectChannel, onLongClick = { showFullName = true })
             .focusable(interactionSource = interactionSource)
             .onPreviewKeyEvent { event ->
                 if (event.nativeKeyEvent.action != AndroidViewKeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
@@ -1202,7 +1243,8 @@ private fun GuideRow(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f).focusedChannelName(isFocused),
+                        overflow = if (isFocused) TextOverflow.Clip else TextOverflow.Ellipsis
                     )
                     StatusChip(
                         text = if (selected) "ACTIVO" else "OK",
@@ -1270,6 +1312,8 @@ private fun GuideRow(
             }
         }
     }
+    if (showFullName) FullChannelNameDialog(entry.channel.name) { showFullName = false }
+
 }
 
 @Composable
@@ -1749,14 +1793,17 @@ private fun SettingsScreen(
     }
 }
 
-@androidx.media3.common.util.UnstableApi
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun MaintenanceSection(vm: MainViewModel) {
     val storageInfo by vm.storageInfo.collectAsStateWithLifecycle()
+    val maintenanceMessage by vm.maintenanceMessage.collectAsStateWithLifecycle()
+    val maintenanceBusy by vm.maintenanceBusy.collectAsStateWithLifecycle()
+    val maintenanceUi by vm.uiState.collectAsStateWithLifecycle()
     var showResetPreferencesDialog by rememberSaveable { mutableStateOf(false) }
     var showResetAppDialog by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { vm.refreshStorageInfo() }
+    LaunchedEffect(maintenanceUi.playlistSource?.type, maintenanceUi.playlistSource?.value) { vm.refreshStorageInfo() }
 
     if (showResetPreferencesDialog) {
         AlertDialog(
@@ -1817,7 +1864,7 @@ private fun MaintenanceSection(vm: MainViewModel) {
     ) {
         SectionTitle(
             title = "Mantenimiento",
-            subtitle = "Almacenamiento total: ${storageInfo.totalBytes.formatStorageSize()}"
+            subtitle = "Archivos de caché: ${storageInfo.total.label()}"
         )
 
         Row(
@@ -1826,20 +1873,26 @@ private fun MaintenanceSection(vm: MainViewModel) {
         ) {
             StorageInfoCard(
                 label = "Caché reproducción",
-                size = storageInfo.playbackCacheBytes.formatStorageSize(),
+                size = storageInfo.playback.label(),
                 modifier = Modifier.weight(1f)
             )
             StorageInfoCard(
                 label = "Caché imágenes",
-                size = storageInfo.imageCacheBytes.formatStorageSize(),
+                size = storageInfo.images.label(),
                 modifier = Modifier.weight(1f)
             )
             StorageInfoCard(
-                label = "Otros datos",
-                size = storageInfo.appCacheBytes.formatStorageSize(),
+                label = "Temporales",
+                size = storageInfo.temporary.label(),
                 modifier = Modifier.weight(1f)
             )
         }
+
+        if (maintenanceMessage.isNotBlank()) Text(maintenanceMessage, color = SecondaryTextColor,
+            style = MaterialTheme.typography.bodyMedium)
+        Text("EPG/XMLTV: en memoria, sin caché de disco. Listas, favoritos y preferencias no están incluidos en estos tamaños ni se borran al limpiar cachés. Las imágenes incluyen memoria y disco. Se miden archivos de cacheDir; los journals de imágenes pueden permanecer y las bases internas de índices no se suman.",
+            color = SecondaryTextColor, style = MaterialTheme.typography.bodySmall)
+        AppActionButton(text = "Actualizar tamaños", onClick = vm::refreshStorageInfo, enabled = !maintenanceBusy)
 
         Text(
             text = "Limpieza de caché",
@@ -1855,16 +1908,19 @@ private fun MaintenanceSection(vm: MainViewModel) {
             AppActionButton(
                 text = "Limpiar caché reproducción",
                 onClick = vm::clearPlaybackCache,
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
             AppActionButton(
                 text = "Limpiar caché imágenes",
                 onClick = vm::clearImageCache,
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
             AppActionButton(
                 text = "Limpiar todo el caché",
                 onClick = vm::clearAllCache,
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f),
                 primary = true
             )
@@ -1884,11 +1940,13 @@ private fun MaintenanceSection(vm: MainViewModel) {
             AppActionButton(
                 text = "Restablecer preferencias",
                 onClick = { showResetPreferencesDialog = true },
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
             AppActionButton(
                 text = "Restablecer aplicación",
                 onClick = { showResetAppDialog = true },
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -2080,13 +2138,17 @@ private fun LandingScreen(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun MainScreen(
     ui: UiState,
     vm: MainViewModel,
     onOpenAbout: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onRequestExit: () -> Unit,
+    exitRequester: FocusRequester,
+    focusRestoreToken: Int,
+    osdBlocked: Boolean
 ) {
     var url by rememberSaveable { mutableStateOf("") }
     val selectedChannel = ui.channels.getOrNull(ui.selectedIndex)
@@ -2104,17 +2166,102 @@ private fun MainScreen(
     val windowMetrics = rememberAppWindowMetrics()
     val largePlaylist = ui.channels.size > 10_000
 
+    val scope = rememberCoroutineScope()
+    val focusMemory = remember { BrowserFocusMemory() }
+    val channelAnchor = remember { ChannelFocusAnchor() }
+    val groupBrowser = remember { GroupBrowserState() }
+    val sourceKey = ui.playlistSource?.let { it.type to it.value }
+    SideEffect { groupBrowser.bindSource(sourceKey, ui.groups) }
+    val channelScroll = rememberLazyListState()
+    val groupScroll = remember(groupBrowser.sourceEpoch) { LazyListState() }
+    val groupChannelScroll = remember(groupBrowser.sourceEpoch, groupBrowser.selectionEpoch) { LazyListState() }
+    val groupChannelAnchor = remember(groupBrowser.sourceEpoch, groupBrowser.selectionEpoch) { ChannelFocusAnchor() }
+    val railRequesters = remember(exitRequester) { List(TvDestination.entries.size) { if (it == TvDestination.EXIT.ordinal) exitRequester else FocusRequester() } }
+    val catalogHeaderRequester = remember { FocusRequester() }
+    val playerRequester = remember { FocusRequester() }
+    var channelFocusToken by remember { mutableIntStateOf(0) }
+    val activeScreen = rememberUpdatedState(ui.currentScreen)
+    val full = rememberUpdatedState(ui.isFullscreen)
+    val emptyFilter = rememberUpdatedState(if (groupBrowser.active && groupBrowser.showingGroups) ui.groups.isEmpty() else ui.filteredChannels.isEmpty())
+    fun focusCatalogue() {
+        focusMemory.zone = BrowserZone.CHANNELS
+        scope.launch {
+            withFrameNanos { }
+            if (activeScreen.value != AppScreen.MAIN || full.value) return@launch
+            if (emptyFilter.value) runCatching { catalogHeaderRequester.requestFocus() }
+            else channelFocusToken++
+        }
+    }
+    fun focusRail() {
+        scope.launch {
+            withFrameNanos { }
+            if (activeScreen.value == AppScreen.MAIN && !full.value) {
+                runCatching { railRequesters[focusMemory.rail.ordinal].requestFocus() }
+            }
+        }
+    }
+    fun focusPlayer() {
+        scope.launch {
+            withFrameNanos { }
+            if (activeScreen.value == AppScreen.MAIN) runCatching { playerRequester.requestFocus() }
+        }
+    }
+    SideEffect {
+        if (channelAnchor.bindSource(ui.channels) && ui.channels.isNotEmpty() && ui.currentScreen == AppScreen.MAIN && !ui.isFullscreen) {
+            focusCatalogue()
+        }
+    }
+    var previousScreen by remember { mutableStateOf(ui.currentScreen) }
+    var previousFullscreen by remember { mutableStateOf(ui.isFullscreen) }
+    LaunchedEffect(ui.currentScreen, ui.isFullscreen, focusRestoreToken) {
+        val restore = (previousScreen != AppScreen.MAIN && ui.currentScreen == AppScreen.MAIN) ||
+            (previousFullscreen && !ui.isFullscreen) || focusRestoreToken > 0
+        previousScreen = ui.currentScreen
+        previousFullscreen = ui.isFullscreen
+        if (restore && ui.currentScreen == AppScreen.MAIN && !ui.isFullscreen) {
+            when (focusMemory.zone) {
+                BrowserZone.RAIL -> focusRail()
+                BrowserZone.CHANNELS -> if (ui.channels.isNotEmpty()) focusCatalogue() else focusRail()
+                BrowserZone.PLAYER -> focusPlayer()
+            }
+        }
+    }
+
+    val activeNavigation = when {
+        groupBrowser.active -> TvDestination.GROUPS
+        ui.selectedGroupId == FavoriteChannelsGroupId -> TvDestination.FAVORITES
+        else -> TvDestination.TELEVISION
+    }
+    val navigate: (TvDestination) -> Unit = { destination ->
+        when (destination) {
+            TvDestination.TELEVISION -> { groupBrowser.leaveGroups(); vm.selectGroup(AllChannelsGroupId) }
+            TvDestination.FAVORITES -> { groupBrowser.leaveGroups(); vm.selectGroup(FavoriteChannelsGroupId) }
+            TvDestination.GROUPS -> { groupBrowser.openGroups(); focusCatalogue() }
+            TvDestination.SEARCH -> vm.openSearch()
+            TvDestination.GUIDE -> vm.openGuide()
+            TvDestination.FILES -> vm.openFileBrowser()
+            TvDestination.SETTINGS -> onOpenSettings()
+            TvDestination.ABOUT -> onOpenAbout()
+            TvDestination.EXIT -> onRequestExit()
+        }
+    }
     LaunchedEffect(ui.playlistSource?.value, ui.playlistSource?.type) {
         if (ui.playlistSource?.type == PlaylistSourceType.URL && ui.playlistSource.value != url) {
             url = ui.playlistSource.value
         }
     }
 
-    BackHandler(enabled = ui.isFullscreen) {
-        vm.exitFullscreen()
+    GroupBrowserBackHandler(enabled = ui.currentScreen == AppScreen.MAIN && !ui.isFullscreen, browser = groupBrowser) {
+        focusCatalogue()
     }
+    FullscreenOsdBackHandler(enabled = ui.isFullscreen && !osdBlocked, visible = ui.controlsVisible,
+        onHide = { vm.showControls(false) }, onExit = vm::exitFullscreen)
 
     if (ui.channels.isEmpty()) {
+        Row(Modifier.fillMaxSize()) {
+            TvNavigationRail(windowMetrics.isCompact, activeNavigation, navigate,
+                Modifier.width(if (windowMetrics.isCompact) 72.dp else 144.dp).fillMaxHeight(), exitRequester, railRequesters, focusMemory)
+            Box(Modifier.weight(1f)) {
         LandingScreen(
             ui = ui,
             url = url,
@@ -2125,6 +2272,8 @@ private fun MainScreen(
             onOpenAbout = onOpenAbout,
             onOpenSettings = onOpenSettings
         )
+            }
+        }
         return
     }
 
@@ -2134,7 +2283,8 @@ private fun MainScreen(
             .background(AppBackgroundColor)
     ) {
         val useVerticalLayout = windowMetrics.useStackedMainLayout(maxWidth)
-        val sidePanelWidth = windowMetrics.sidePanelWidth(maxWidth, largePlaylist)
+        val railWidth = if (useVerticalLayout) 72.dp else 144.dp
+        val sidePanelWidth = windowMetrics.sidePanelWidth(maxWidth - railWidth, largePlaylist)
         val stackedPanelHeight = windowMetrics.stackedPanelHeight(maxHeight)
 
         PlayerPanel(
@@ -2142,12 +2292,18 @@ private fun MainScreen(
                 ui.isFullscreen -> Modifier.fillMaxSize()
                 useVerticalLayout -> Modifier
                     .fillMaxSize()
-                    .padding(top = stackedPanelHeight)
+                    .padding(start = railWidth, top = stackedPanelHeight)
                 else -> Modifier
                     .fillMaxSize()
-                    .padding(start = sidePanelWidth)
+                    .padding(start = railWidth + sidePanelWidth)
             },
             selectedChannel = selectedChannel,
+            currentProgram = selectedChannel?.let { currentProgramForChannel(it, ui.currentPrograms) },
+            nextProgram = selectedChannel?.let { nextProgramForChannel(it, ui.nextPrograms) },
+            playerFocusRequester = playerRequester,
+            onPlayerFocused = { focusMemory.zone = BrowserZone.PLAYER; focusMemory.hasFocused = true },
+            onMoveLeft = if (ui.isFullscreen) null else ::focusCatalogue,
+            playbackRequestId = ui.playbackRequestId,
             selectedChannelIsFavorite = selectedChannelIsFavorite,
             selectedChannelIsIndividuallyFavorite = selectedChannelIsIndividuallyFavorite,
             selectedChannelGroup = selectedChannelGroup,
@@ -2160,6 +2316,10 @@ private fun MainScreen(
             playbackMessageIsError = ui.playbackMessageIsError,
             controlsVisible = ui.controlsVisible,
             controlsVisibilityToken = ui.controlsVisibilityToken,
+            osdBlocked = osdBlocked,
+            onPreviousChannel = if (ui.filteredChannels.size > 1) ({ adjacentOsdChannel(ui.filteredChannels, ui.selectedVisibleIndex, false)?.let(vm::selectChannel) }) else null,
+            onNextChannel = if (ui.filteredChannels.size > 1) ({ adjacentOsdChannel(ui.filteredChannels, ui.selectedVisibleIndex, true)?.let(vm::selectChannel) }) else null,
+            onOpenChannelInfo = if (selectedChannel != null) vm::openChannelInfo else null,
             isFullscreen = ui.isFullscreen,
             onToggleFullscreen = vm::toggleFullscreen,
             onToggleChannelLogos = vm::toggleChannelLogos,
@@ -2170,34 +2330,58 @@ private fun MainScreen(
             onInputActivity = { vm.showControls(true) },
             onAutoHide = { vm.showControls(false) },
             onReconnectScheduled = {
-                selectedChannel?.let { channel -> vm.onPlaybackReconnectScheduled(channel.name) }
+                selectedChannel?.let { channel -> vm.onPlaybackReconnectScheduled(channel.name, ui.playbackRequestId) }
             },
             onPlaybackStarted = {
-                selectedChannel?.let { channel -> vm.onPlaybackStarted(channel.name) }
+                selectedChannel?.let { channel -> vm.onPlaybackStarted(channel.name, ui.playbackRequestId) }
             },
             onPlaybackEnded = {
                 val channelName = selectedChannel?.name ?: "Vídeo"
-                vm.onPlaybackEnded(channelName)
+                vm.onPlaybackEnded(channelName, ui.playbackRequestId)
             },
             onPlaybackError = { message ->
                 val channelName = selectedChannel?.name ?: "Canal"
-                vm.onPlaybackError(channelName, message)
+                vm.onPlaybackError(channelName, message, ui.playbackRequestId)
             }
         )
 
         if (!ui.isFullscreen) {
+            TvNavigationRail(useVerticalLayout, activeNavigation, navigate,
+                Modifier.align(Alignment.CenterStart).width(railWidth).fillMaxHeight(), exitRequester, railRequesters, focusMemory, ::focusCatalogue)
             SidePanel(
                 modifier = if (useVerticalLayout) {
                     Modifier
                         .align(Alignment.TopStart)
                         .fillMaxWidth()
                         .height(stackedPanelHeight)
+                        .padding(start = railWidth)
                 } else {
                     Modifier
                         .align(Alignment.CenterStart)
                         .fillMaxHeight()
+                        .padding(start = railWidth)
                 },
                 widthOverride = if (useVerticalLayout) null else sidePanelWidth,
+                headerRequester = catalogHeaderRequester,
+                listState = if (groupBrowser.active) groupChannelScroll else channelScroll,
+                focusAnchor = if (groupBrowser.active) groupChannelAnchor else channelAnchor,
+                groupBrowser = groupBrowser,
+                groupListState = groupScroll,
+                onChooseGroup = { index ->
+                    groupBrowser.chooseGroup(index)?.let { groupId ->
+                        vm.selectGroup(groupId)
+                        focusCatalogue()
+                    }
+                },
+                onReturnGroups = { if (groupBrowser.back()) focusCatalogue() },
+                focusRequestToken = channelFocusToken,
+                onMoveLeft = ::focusRail,
+                onMoveRight = ::focusPlayer,
+                onChannelFocused = { index ->
+                    (if (groupBrowser.active) groupChannelAnchor else channelAnchor).originalIndex = index
+                    focusMemory.zone = BrowserZone.CHANNELS; focusMemory.hasFocused = true
+                },
+                onRequestChannelFocus = ::focusCatalogue,
                 epgSettings = ui.epgSettings,
                 currentPrograms = ui.currentPrograms,
                 isLoading = ui.isLoading,
@@ -2230,6 +2414,18 @@ private fun MainScreen(
 private fun SidePanel(
     modifier: Modifier,
     widthOverride: androidx.compose.ui.unit.Dp?,
+    headerRequester: FocusRequester,
+    listState: LazyListState,
+    focusAnchor: ChannelFocusAnchor,
+    groupBrowser: GroupBrowserState,
+    groupListState: LazyListState,
+    onChooseGroup: (Int) -> Unit,
+    onReturnGroups: () -> Unit,
+    focusRequestToken: Int,
+    onMoveLeft: () -> Unit,
+    onMoveRight: () -> Unit,
+    onChannelFocused: (Int) -> Unit,
+    onRequestChannelFocus: () -> Unit,
     epgSettings: EpgSettings,
     currentPrograms: Map<String, CurrentProgram>,
     isLoading: Boolean,
@@ -2254,14 +2450,17 @@ private fun SidePanel(
     onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
+    SideEffect { NavigationDiagnostics.composedPanel() }
     val panelModifier = if (widthOverride != null) {
         modifier.width(widthOverride)
     } else {
         modifier
     }
-    val selectedEntry = filteredChannels.firstOrNull { it.originalIndex == selectedIndex }
-    val selectedGroupTitle = groups.firstOrNull { it.id == selectedGroupId }?.title ?: "Todos los canales"
-    var channelListFocusToken by rememberSaveable { mutableIntStateOf(0) }
+    val showingGroups = groupBrowser.active && groupBrowser.showingGroups
+    val selectedEntry = if (showingGroups) null else filteredChannels.getOrNull(findVisibleChannelIndex(filteredChannels, selectedIndex))
+    val selectedGroupTitle = remember(groups, selectedGroupId) { groups.firstOrNull { it.id == selectedGroupId }?.title ?: "Todos los canales" }
+    val headerInteraction = remember { MutableInteractionSource() }
+    val headerFocused by headerInteraction.collectIsFocusedAsState()
 
     Column(
         modifier = panelModifier
@@ -2278,9 +2477,19 @@ private fun SidePanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .focusRequester(headerRequester)
+                    .onPreviewKeyEvent { event ->
+                        if (event.nativeKeyEvent.action != AndroidViewKeyEvent.ACTION_DOWN) false
+                        else when (event.nativeKeyEvent.keyCode) {
+                            AndroidViewKeyEvent.KEYCODE_DPAD_LEFT -> { onMoveLeft(); true }
+                            AndroidViewKeyEvent.KEYCODE_DPAD_RIGHT -> { onMoveRight(); true }
+                            else -> false
+                        }
+                    }
+                    .focusable(interactionSource = headerInteraction)
                     .clip(ItemShape)
                     .background(StatusChipAccentColor.copy(alpha = 0.32f))
-                    .border(1.dp, PrimaryButtonColor.copy(alpha = 0.5f), ItemShape)
+                    .border(if (headerFocused) 2.dp else 1.dp, if (headerFocused) FocusHighlightColor else PrimaryButtonColor.copy(alpha = 0.5f), ItemShape)
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -2292,55 +2501,54 @@ private fun SidePanel(
                 )
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     Text(
-                        text = selectedGroupTitle,
+                        text = if (showingGroups) "Grupos" else selectedGroupTitle,
                         color = Color.White,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        modifier = Modifier
                     )
                     Text(
-                        text = selectedEntry?.channel?.name
+                        text = if (showingGroups) "Selecciona un grupo y pulsa OK" else selectedEntry?.channel?.name
                             ?: if (isLoading) "Cargando…" else "${filteredChannels.size} canales",
                         color = MutedTextColor,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        modifier = Modifier
                     )
                 }
                 StatusChip(
-                    text = filteredChannels.size.toString(),
+                    text = (if (showingGroups) groups.size else filteredChannels.size).toString(),
                     accent = true
                 )
+                if (groupBrowser.active && !showingGroups) {
+                    androidx.compose.material3.TextButton(onClick = onReturnGroups) { Text("Grupos") }
+                }
             }
 
-            BottomActionBar(
-                onOpenSearch = onOpenSearch,
-                onOpenFavorites = {
-                    onSelectGroup(FavoriteChannelsGroupId)
-                    channelListFocusToken += 1
-                },
-                onOpenGuide = onOpenGuide,
-                onOpenSettings = onOpenSettings,
-                onOpenAbout = onOpenAbout,
-                hasFavorites = favoriteIds.isNotEmpty() || favoriteGroupIds.isNotEmpty(),
-                favoritesSelected = selectedGroupId == FavoriteChannelsGroupId,
-                epgEnabled = epgSettings.enabled
-            )
-
-            if (groups.size > 1) {
+            if (!groupBrowser.active && selectedGroupId == FavoriteChannelsGroupId && groups.size > 1) {
                 HorizontalGroupStrip(
                     modifier = Modifier.fillMaxWidth(),
                     groups = groups,
                     selectedGroupId = selectedGroupId,
+                    onMoveLeft = onMoveLeft,
+                    onMoveRight = onMoveRight,
+                    onMoveDown = onRequestChannelFocus,
                     onSelectGroup = { groupId ->
                         onSelectGroup(groupId)
-                        channelListFocusToken += 1
+                        onRequestChannelFocus()
                     }
                 )
             }
 
-            ChannelList(
+            if (showingGroups) TvGroupList(
+                groups = groups, selectedGroupId = groupBrowser.selectedGroupId,
+                focusedGroupIndex = groupBrowser.focusedGroupIndex,
+                listState = groupListState, focusRequestToken = focusRequestToken,
+                onFocused = groupBrowser::focusGroup, onSelect = onChooseGroup,
+                onMoveLeft = onMoveLeft, onMoveRight = onMoveRight,
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            ) else ChannelList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -2353,9 +2561,14 @@ private fun SidePanel(
                 selectedIndex = selectedIndex,
                 selectedVisibleIndex = selectedVisibleIndex,
                 listResetKey = selectedGroupId,
-                focusRequestToken = channelListFocusToken,
+                focusRequestToken = focusRequestToken,
+                listState = listState,
+                focusAnchor = focusAnchor,
+                scrollToSelection = !groupBrowser.active,
+                onFocused = onChannelFocused,
+                onMoveRight = onMoveRight,
                 continuousPlayActive = continuousPlayActive,
-                onBackToGroups = null,
+                onBackToGroups = onMoveLeft,
                 onToggleFavorite = onToggleFavorite,
                 onToggleWatched = onToggleWatched,
                 onPlayContinuousFrom = onPlayContinuousFrom,
@@ -2622,16 +2835,19 @@ private fun HorizontalGroupStrip(
     modifier: Modifier = Modifier,
     groups: List<ChannelGroup>,
     selectedGroupId: String,
+    onMoveLeft: (() -> Unit)? = null,
+    onMoveRight: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
     onSelectGroup: (String) -> Unit
 ) {
     if (groups.isEmpty()) return
 
     val listState = rememberLazyListState()
-    val selectedIndex = groups.indexOfFirst { it.id == selectedGroupId }.coerceAtLeast(0)
+    val selectedIndex = remember(groups, selectedGroupId) { groups.indexOfFirst { it.id == selectedGroupId }.coerceAtLeast(0) }
 
     LaunchedEffect(selectedIndex, groups.size) {
         if (selectedIndex >= 0 && groups.isNotEmpty()) {
-            listState.animateScrollToItem(selectedIndex)
+            listState.scrollToItem(selectedIndex)
         }
     }
 
@@ -2652,6 +2868,15 @@ private fun HorizontalGroupStrip(
 
             Box(
                 modifier = Modifier
+                    .onPreviewKeyEvent { event ->
+                        if (event.nativeKeyEvent.action != AndroidViewKeyEvent.ACTION_DOWN) false
+                        else when {
+                            event.nativeKeyEvent.keyCode == AndroidViewKeyEvent.KEYCODE_DPAD_DOWN && onMoveDown != null -> { onMoveDown(); true }
+                            event.nativeKeyEvent.keyCode == AndroidViewKeyEvent.KEYCODE_DPAD_LEFT && group.id == groups.first().id && onMoveLeft != null -> { onMoveLeft(); true }
+                            event.nativeKeyEvent.keyCode == AndroidViewKeyEvent.KEYCODE_DPAD_RIGHT && group.id == groups.last().id && onMoveRight != null -> { onMoveRight(); true }
+                            else -> false
+                        }
+                    }
                     .clip(ChipShape)
                     .background(
                         when {
@@ -2899,7 +3124,7 @@ private fun GroupRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChannelList(
+internal fun ChannelList(
     modifier: Modifier = Modifier,
     filteredChannels: List<ChannelListEntry>,
     favoriteIds: Set<String>,
@@ -2911,6 +3136,11 @@ private fun ChannelList(
     selectedVisibleIndex: Int,
     listResetKey: Any? = null,
     focusRequestToken: Int = 0,
+    listState: LazyListState = rememberLazyListState(),
+    focusAnchor: ChannelFocusAnchor? = null,
+    scrollToSelection: Boolean = true,
+    onFocused: ((Int) -> Unit)? = null,
+    onMoveRight: (() -> Unit)? = null,
     continuousPlayActive: Boolean = false,
     onBackToGroups: (() -> Unit)? = null,
     onToggleFavorite: (Int) -> Unit,
@@ -2919,6 +3149,8 @@ private fun ChannelList(
     onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
+    SideEffect { NavigationDiagnostics.catalogueShown(listResetKey == AllChannelsGroupId, filteredChannels) }
+    DisposableEffect(Unit) { onDispose { NavigationDiagnostics.catalogueHidden() } }
     if (filteredChannels.isEmpty()) {
         Box(
             modifier = modifier
@@ -2938,11 +3170,23 @@ private fun ChannelList(
         return
     }
 
-    val listState = rememberLazyListState()
-    val focusOriginalIndex = filteredChannels.getOrNull(selectedVisibleIndex)?.originalIndex
+    val focusRequest = remember(listResetKey, focusRequestToken) { BrowserFocusRequest() }
+    val focusOriginalIndex = remember(listResetKey, focusRequestToken) {
+        val anchored = focusAnchor?.originalIndex ?: -1
+        if (findVisibleChannelIndex(filteredChannels, anchored) >= 0) anchored
+        else filteredChannels.getOrNull(selectedVisibleIndex)?.originalIndex ?: filteredChannels.first().originalIndex
+    }
+    LaunchedEffect(focusRequestToken) {
+        if (focusRequestToken > 0) {
+            val target = findVisibleChannelIndex(filteredChannels, focusOriginalIndex)
+            if (target >= 0 && (scrollToSelection || listState.layoutInfo.visibleItemsInfo.none { it.index == target })) {
+                listState.scrollToItem(target)
+            }
+        }
+    }
 
     LaunchedEffect(listResetKey, selectedVisibleIndex, filteredChannels.size) {
-        if (filteredChannels.isEmpty()) return@LaunchedEffect
+        if (!scrollToSelection || filteredChannels.isEmpty()) return@LaunchedEffect
         val targetIndex = when {
             selectedVisibleIndex in filteredChannels.indices -> selectedVisibleIndex
             else -> 0
@@ -2972,10 +3216,13 @@ private fun ChannelList(
                 currentProgram = currentProgramForChannel(entry.channel, currentPrograms),
                 showChannelLogos = showChannelLogos,
                 selected = entry.originalIndex == selectedIndex,
-                requestInitialFocus = focusOriginalIndex != null && focusOriginalIndex == entry.originalIndex,
+                requestInitialFocus = focusOriginalIndex == entry.originalIndex,
+                focusRequest = focusRequest,
                 focusRequestToken = focusRequestToken,
                 continuousPlayActive = continuousPlayActive,
                 onBackToGroups = onBackToGroups,
+                onFocused = onFocused,
+                onMoveRight = onMoveRight,
                 onToggleFavorite = onToggleFavorite,
                 onToggleWatched = onToggleWatched,
                 onPlayContinuousFrom = onPlayContinuousFrom,
@@ -2997,21 +3244,26 @@ private fun ChannelRow(
     showChannelLogos: Boolean,
     selected: Boolean,
     requestInitialFocus: Boolean,
+    focusRequest: BrowserFocusRequest,
     focusRequestToken: Int,
     continuousPlayActive: Boolean,
     onBackToGroups: (() -> Unit)?,
+    onFocused: ((Int) -> Unit)?,
+    onMoveRight: (() -> Unit)?,
     onToggleFavorite: (Int) -> Unit,
     onToggleWatched: (Int) -> Unit,
     onPlayContinuousFrom: (Int) -> Unit,
     onStopContinuousPlay: () -> Unit,
     onSelectChannel: (Int) -> Unit
 ) {
+    SideEffect { NavigationDiagnostics.composedRow() }
     val interactionSource = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
     var menuExpanded by remember { mutableStateOf(false) }
-    val isActive = selected || isFocused
+    var showFullName by remember { mutableStateOf(false) }
+    val isActive = selected
     val backgroundColor = when {
         selected && isFocused -> ChannelRowSelectedColor
         selected -> ChannelRowSelectedColor.copy(alpha = 0.86f)
@@ -3030,16 +3282,17 @@ private fun ChannelRow(
         if (isFavorite) append("★ ")
     }
 
-    LaunchedEffect(focusRequestToken, requestInitialFocus) {
-        if (focusRequestToken > 0 && requestInitialFocus) {
+    LaunchedEffect(focusRequestToken) {
+        if (focusRequestToken > 0 && requestInitialFocus && !focusRequest.consumed) {
             kotlinx.coroutines.yield()
-            runCatching { focusRequester.requestFocus() }
+            runCatching { focusRequester.requestFocus(); focusRequest.consumed = true }
         }
     }
 
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .semantics { stateDescription = if (selected) "En reproducción" else "Disponible" }
             .clip(ItemShape)
             .background(backgroundColor)
             .border(
@@ -3047,13 +3300,8 @@ private fun ChannelRow(
                 color = accentColor,
                 shape = ItemShape
             )
+            .onFocusChanged { if (it.isFocused) { NavigationDiagnostics.focusChanged(); onFocused?.invoke(entry.originalIndex) } }
             .focusRequester(focusRequester)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { onSelectChannel(entry.originalIndex) },
-                onLongClick = { menuExpanded = true }
-            )
             .pointerInput(entry.originalIndex) {
                 awaitEachGesture {
                     val event = awaitPointerEvent(PointerEventPass.Main)
@@ -3069,8 +3317,10 @@ private fun ChannelRow(
                 }
                 when (event.nativeKeyEvent.keyCode) {
                     AndroidViewKeyEvent.KEYCODE_DPAD_LEFT -> {
-                        onBackToGroups?.invoke()
-                        true
+                        if (onBackToGroups != null) { onBackToGroups(); true } else false
+                    }
+                    AndroidViewKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (onMoveRight != null) { onMoveRight(); true } else false
                     }
                     AndroidViewKeyEvent.KEYCODE_MENU,
                     AndroidViewKeyEvent.KEYCODE_INFO -> {
@@ -3080,7 +3330,12 @@ private fun ChannelRow(
                     else -> false
                 }
             }
-            .focusable(interactionSource = interactionSource)
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { onSelectChannel(entry.originalIndex) },
+                onLongClick = { menuExpanded = true }
+            )
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -3089,7 +3344,7 @@ private fun ChannelRow(
             Box(
                 modifier = Modifier
                     .width(4.dp)
-                    .height(52.dp)
+                    .height(56.dp)
                     .background(if (isActive) PrimaryButtonColor else Color.Transparent)
             )
             Row(
@@ -3103,14 +3358,14 @@ private fun ChannelRow(
                     text = (entry.originalIndex + 1).toString().padStart(3, '0'),
                     color = if (isActive) Color.White else SecondaryTextColor,
                     style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.width(30.dp)
+                    modifier = Modifier.width(60.dp)
                 )
                 ChannelLogo(
                     showChannelLogos = showChannelLogos,
                     logoUrl = entry.channel.logoUrl,
                     channelName = entry.channel.name,
                     modifier = Modifier
-                        .width(56.dp)
+                        .width(44.dp)
                         .height(32.dp)
                 )
                 Column(
@@ -3123,14 +3378,11 @@ private fun ChannelRow(
                         maxLines = 1,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = if (selected || isFocused || isHovered) {
-                            Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                        } else {
-                            Modifier
-                        }
+                        overflow = if (isFocused) TextOverflow.Clip else TextOverflow.Ellipsis,
+                        modifier = Modifier.focusedChannelName(isFocused)
                     )
                     Text(
-                        text = entry.groupTitle,
+                        text = entry.groupTitle + if (selected) " · En reproducción" else "",
                         color = if (selected) Color.White else SecondaryTextColor,
                         maxLines = 1,
                         style = MaterialTheme.typography.labelSmall
@@ -3205,8 +3457,14 @@ private fun ChannelRow(
                     onToggleFavorite(entry.originalIndex)
                 }
             )
+            DropdownMenuItem(text = { Text("Ver nombre completo") }, onClick = {
+                menuExpanded = false
+                showFullName = true
+            })
         }
     }
+    if (showFullName) FullChannelNameDialog(entry.channel.name) { showFullName = false }
+
 }
 
 @Composable
@@ -3303,11 +3561,18 @@ private fun playbackTimelineLabel(state: PlaybackControllerState): String {
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlayerPanel(
     modifier: Modifier,
     selectedChannel: Channel?,
+    currentProgram: CurrentProgram? = null,
+    nextProgram: CurrentProgram? = null,
+    playerFocusRequester: FocusRequester = remember { FocusRequester() },
+    onPlayerFocused: () -> Unit = {},
+    onMoveLeft: (() -> Unit)? = null,
+    playbackRequestId: Long = 0L,
     selectedChannelIsFavorite: Boolean,
     selectedChannelIsIndividuallyFavorite: Boolean,
     selectedChannelGroup: ChannelGroup?,
@@ -3320,6 +3585,10 @@ private fun PlayerPanel(
     playbackMessageIsError: Boolean,
     controlsVisible: Boolean,
     controlsVisibilityToken: Int,
+    osdBlocked: Boolean,
+    onPreviousChannel: (() -> Unit)?,
+    onNextChannel: (() -> Unit)?,
+    onOpenChannelInfo: (() -> Unit)?,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
     onToggleChannelLogos: () -> Unit,
@@ -3332,9 +3601,11 @@ private fun PlayerPanel(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit,
-    onPlaybackError: (String?) -> Unit
+    onPlaybackError: (PlaybackFailure) -> Unit
 ) {
     val windowMetrics = rememberAppWindowMetrics()
+    var playerAreaFocused by remember { mutableStateOf(false) }
+    val playerInteraction = remember { MutableInteractionSource() }
     val fullscreenTransitionToken = remember(selectedChannel?.playbackUrl) { mutableIntStateOf(0) }
     var playbackControllerState by remember(selectedChannel?.playbackUrl, playbackBackend) {
         mutableStateOf(PlaybackControllerState())
@@ -3357,14 +3628,31 @@ private fun PlayerPanel(
         else -> 10.dp
     }
 
+    val osdFocus = remember { FocusRequester() }
+    var osdFocusToken by remember { mutableIntStateOf(0) }
+    var osdHasFocus by remember { mutableStateOf(false) }
+    val osdActions = fullscreenOsdActions(
+        playbackControllerState, playbackControllerActions, onPreviousChannel, onNextChannel,
+        if (selectedChannel != null) onToggleFavorite else null,
+        if (selectedChannelGroup != null) onToggleFavoriteGroup else null,
+        onOpenChannelInfo, onOpenSettings, handleFullscreenToggle,
+        selectedChannelIsIndividuallyFavorite, selectedChannelGroupIsFavorite
+    )
+    val preferredOsdAction = remember(isFullscreen, controlsVisible, osdBlocked) { osdActions.first().id }
+    val primaryOsdAction = osdActions.firstOrNull { it.id == preferredOsdAction }?.id ?: osdActions.first().id
+    FullscreenOsdEffects(isFullscreen, controlsVisible, osdBlocked, controlsVisibilityToken,
+        playbackRequestId, osdFocusToken, osdFocus, playerFocusRequester, onAutoHide)
     PlayerControlsAutoHideEffect(
-        controlsVisible = controlsVisible,
+        controlsVisible = controlsVisible && !isFullscreen && !osdBlocked,
         activityToken = controlsVisibilityToken,
         streamUrl = selectedChannel?.streamUrl,
         onAutoHide = onAutoHide
     )
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val innerWidth = (maxWidth - chromePadding * 2 - chromeInnerPadding * 2).coerceAtLeast(1.dp)
+        val previewWidth = minOf(innerWidth, (maxHeight * 0.58f).coerceAtLeast(64.dp) * (16f / 9f))
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .then(
                 if (isFullscreen) {
@@ -3381,102 +3669,12 @@ private fun PlayerPanel(
         verticalArrangement = Arrangement.spacedBy(if (isFullscreen) 0.dp else 10.dp)
     ) {
         if (!isFullscreen) {
-            if (windowMetrics.isCompact) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = selectedChannel?.name ?: "Vista previa",
-                            color = Color.White,
-                            maxLines = 1,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = selectedChannel?.group?.takeIf { it.isNotBlank() }
-                                ?: "Carga una lista y selecciona un canal para empezar",
-                            color = SecondaryTextColor,
-                            maxLines = 1,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        playbackMessage?.let { message ->
-                            StatusChip(
-                                text = message,
-                                accent = !playbackMessageIsError
-                            )
-                        }
-                        Spacer(modifier = Modifier.weight(1f))
-                        AppActionButton(
-                            text = "Fullscreen",
-                            onClick = onToggleFullscreen,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        AppActionButton(
-                            text = "Ajustes",
-                            onClick = onOpenSettings,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                    }
-                }
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = selectedChannel?.name ?: "Vista previa",
-                            color = Color.White,
-                            maxLines = 1,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = selectedChannel?.group?.takeIf { it.isNotBlank() }
-                                ?: "Carga una lista y selecciona un canal para empezar",
-                            color = SecondaryTextColor,
-                            maxLines = 1,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        playbackMessage?.let { message ->
-                            StatusChip(
-                                text = message,
-                                accent = !playbackMessageIsError
-                            )
-                        }
-                        AppActionButton(
-                            text = "Fullscreen",
-                            onClick = onToggleFullscreen,
-                            modifier = Modifier.widthIn(min = 100.dp, max = 122.dp)
-                        )
-                        AppActionButton(
-                            text = "Ajustes",
-                            onClick = onOpenSettings,
-                            modifier = Modifier.widthIn(min = 96.dp, max = 112.dp)
-                        )
-                    }
-                }
-            }
+            BrowserPlaybackHeader(selectedChannel, playbackBackend, playbackMessage, playbackMessageIsError, handleFullscreenToggle)
         }
 
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
+            modifier = (if (isFullscreen) Modifier.fillMaxWidth().weight(1f)
+                else Modifier.width(previewWidth).aspectRatio(16f / 9f).align(Alignment.CenterHorizontally))
                 .then(
                     if (isFullscreen) {
                         Modifier.background(Color.Black)
@@ -3487,12 +3685,38 @@ private fun PlayerPanel(
                             .border(1.dp, PanelBorderColor, PanelShape)
                     }
                 )
+
+                .then(if (playerAreaFocused && !isFullscreen) Modifier.border(2.dp, FocusHighlightColor, PanelShape) else Modifier)
+                .focusRequester(playerFocusRequester)
+                .onFocusChanged { state ->
+                    playerAreaFocused = state.isFocused
+                    if (state.hasFocus) onPlayerFocused()
+                }
+                .fullscreenOsdInput(isFullscreen && !osdBlocked, controlsVisible, playerAreaFocused || !osdHasFocus,
+                    onInputActivity, { osdFocusToken++ })
+                .onPreviewKeyEvent { event ->
+                    val native = event.nativeKeyEvent
+                    val command = tvMediaCommand(native.keyCode, native.action, playbackControllerState.canSeek)
+                    when {
+                        dispatchTvMediaCommand(command, playbackControllerState, playbackControllerActions, onInputActivity) -> true
+                        native.keyCode == AndroidViewKeyEvent.KEYCODE_DPAD_LEFT && native.action == AndroidViewKeyEvent.ACTION_DOWN && playerAreaFocused && onMoveLeft != null -> { onMoveLeft(); true }
+                        !isFullscreen && playerAreaFocused && (native.keyCode == AndroidViewKeyEvent.KEYCODE_DPAD_CENTER || native.keyCode == AndroidViewKeyEvent.KEYCODE_ENTER || native.keyCode == AndroidViewKeyEvent.KEYCODE_NUMPAD_ENTER) -> {
+                            if (native.action == AndroidViewKeyEvent.ACTION_UP) handleFullscreenToggle()
+                            true
+                        }
+                        native.action == AndroidViewKeyEvent.ACTION_UP && (native.keyCode == AndroidViewKeyEvent.KEYCODE_F || native.keyCode == AndroidViewKeyEvent.KEYCODE_MENU) -> { handleFullscreenToggle(); true }
+                        else -> false
+                    }
+                }
+                .combinedClickable(interactionSource = playerInteraction, indication = null,
+                    onClick = onInputActivity, onDoubleClick = handleFullscreenToggle)
         ) {
             if (selectedChannel == null || selectedChannel.playbackUrl.isBlank()) {
                 WelcomePlaceholder()
             } else {
                 PlayerSurface(
                     streamUrl = selectedChannel.playbackUrl,
+                    playbackRequestId = playbackRequestId,
                     requestHeaders = selectedChannel.requestHeaders,
                     playbackBackend = playbackBackend,
                     videoCompatibilityMode = videoCompatibilityMode,
@@ -3510,93 +3734,19 @@ private fun PlayerPanel(
                 )
             }
 
-            if (controlsVisible && isFullscreen && selectedChannel != null && selectedChannel.playbackUrl.isNotBlank()) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(if (isFullscreen) 12.dp else 16.dp)
-                        .fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(ItemShape)
-                            .background(PlayerOverlayColor)
-                            .border(1.dp, PanelBorderColor, ItemShape)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            ChannelLogo(
-                                showChannelLogos = showChannelLogos,
-                                logoUrl = selectedChannel.logoUrl,
-                                channelName = selectedChannel.name,
-                                modifier = Modifier
-                                    .width(48.dp)
-                                    .height(30.dp)
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = selectedChannel.name,
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = selectedChannel.group?.takeIf { it.isNotBlank() }
-                                        ?: playlistSource.sourceDisplayLabel(),
-                                    color = MutedTextColor,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            StatusChip(
-                                text = if (playbackControllerState.isLive) "LIVE" else "VOD",
-                                accent = playbackControllerState.isLive
-                            )
-                            StatusChip(
-                                text = when {
-                                    selectedChannelGroupIsFavorite && selectedChannelIsIndividuallyFavorite -> "★ Canal + grupo"
-                                    selectedChannelGroupIsFavorite -> "★ Grupo"
-                                    selectedChannelIsIndividuallyFavorite -> "★ Canal"
-                                    selectedChannelIsFavorite -> "★"
-                                    else -> playbackBackend.displayName()
-                                },
-                                accent = selectedChannelIsFavorite
-                            )
-                            selectedChannelGroup?.let { group ->
-                                StatusChip(text = "${group.count} · ${group.title}")
-                            }
-                            playbackMessage?.let { message ->
-                                StatusChip(text = message, accent = !playbackMessageIsError)
-                            }
-                            if (isFullscreen) {
-                                MiniOsdButton(
-                                    text = "Salir",
-                                    onClick = handleFullscreenToggle,
-                                    active = true
-                                )
-                            }
-                        }
-                    }
-                }
+            if (controlsVisible && isFullscreen) {
+                FullscreenOsdOverlay(
+                    title = selectedChannel?.name ?: "Reproductor",
+                    current = currentProgram?.title, next = nextProgram?.title,
+                    status = "${playbackModeLabel(playbackControllerState, playbackBackend)} · ${playbackTimelineLabel(playbackControllerState)}",
+                    actions = osdActions, primaryAction = primaryOsdAction, controlsFocus = osdFocus,
+                    onActivity = onInputActivity,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                    onFocused = { osdHasFocus = it }
+                )
             }
 
-            if (controlsVisible && selectedChannel != null && selectedChannel.playbackUrl.isNotBlank()) {
+            if (controlsVisible && !isFullscreen && selectedChannel != null && selectedChannel.playbackUrl.isNotBlank()) {
                 PlayerBottomControlsOverlay(
                     modifier = Modifier.align(Alignment.BottomCenter),
                     bottomPadding = if (windowMetrics.isCompact) 56.dp else 88.dp,
@@ -3606,7 +3756,7 @@ private fun PlayerPanel(
                     selectedChannelGroup = selectedChannelGroup,
                     selectedChannelGroupIsFavorite = selectedChannelGroupIsFavorite,
                     playbackBackend = playbackBackend,
-                    fullscreenButtonLabel = if (isFullscreen) "Salir" else "Fullscreen",
+                    fullscreenButtonLabel = if (isFullscreen) "Volver" else "Ampliar",
                     onToggleFavorite = onToggleFavorite,
                     onToggleFavoriteGroup = onToggleFavoriteGroup,
                     onToggleFullscreen = handleFullscreenToggle,
@@ -3615,6 +3765,11 @@ private fun PlayerPanel(
                 )
             }
         }
+        // Keep the native video surface outside scrolling/clipping viewports.
+        // Only the programme details may scroll; moving focus must not scroll the video away.
+        if (!isFullscreen) BrowserEpgCard(currentProgram, nextProgram,
+            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()))
+    }
     }
 }
 
@@ -3789,7 +3944,7 @@ private fun PlayerBottomControlsOverlay(
     }
 }
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun FullscreenPlayerPanel(
     modifier: Modifier,
@@ -3816,7 +3971,7 @@ private fun FullscreenPlayerPanel(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit,
-    onPlaybackError: (String?) -> Unit
+    onPlaybackError: (PlaybackFailure) -> Unit
 ) {
     Box(
         modifier = modifier

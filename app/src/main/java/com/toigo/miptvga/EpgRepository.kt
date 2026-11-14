@@ -1,5 +1,10 @@
 package com.toigo.miptvga
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+
 internal class EpgRepository(
     private val playlistLoader: PlaylistLoader,
     private val xmltvParser: XmltvParser
@@ -8,18 +13,20 @@ internal class EpgRepository(
         epgUrl: String,
         channels: List<Channel>,
         nowMillis: Long = System.currentTimeMillis()
-    ): Map<String, List<CurrentProgram>> {
+    ): Map<String, List<CurrentProgram>> = withContext(Dispatchers.Default) {
+        val context = currentCoroutineContext()
         val interests = EpgChannelInterests(
-            ids = channels.mapNotNull { it.tvgId?.normalizeEpgLookupKey()?.takeIf(String::isNotBlank) }.toSet(),
-            names = channels.map { it.name.normalizeEpgLookupKey() }.filter { it.isNotBlank() }.toSet()
+            ids = channels.mapNotNull { context.ensureActive(); it.tvgId?.normalizeEpgLookupKey()?.takeIf(String::isNotBlank) }.toSet(),
+            names = channels.map { context.ensureActive(); it.name.normalizeEpgLookupKey() }.filter { it.isNotBlank() }.toSet()
         )
-        if (interests.ids.isEmpty() && interests.names.isEmpty()) return emptyMap()
+        if (interests.ids.isEmpty() && interests.names.isEmpty()) return@withContext emptyMap()
 
-        return playlistLoader.withUrlReader(epgUrl.trim()) { reader ->
+        playlistLoader.withUrlReader(epgUrl.trim()) { reader ->
             xmltvParser.parseProgramTimelines(
                 reader = reader,
                 interests = interests,
-                nowMillis = nowMillis
+                nowMillis = nowMillis,
+                checkCancelled = { context.ensureActive() }
             )
         }
     }

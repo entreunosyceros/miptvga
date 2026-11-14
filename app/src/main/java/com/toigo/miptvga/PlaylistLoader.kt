@@ -3,12 +3,21 @@ package com.toigo.miptvga
 import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.BufferedReader
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 private const val HttpConnectTimeoutSeconds = 15L
 private const val HttpReadTimeoutSeconds = 20L
@@ -47,8 +56,7 @@ internal class PlaylistLoader {
             .header("User-Agent", IptvDefaultUserAgent)
             .build()
 
-        val response = client.newCall(request).execute()
-        response.use { resp ->
+        client.newCall(request).readResponse { resp ->
             if (!resp.isSuccessful) {
                 val message = resp.message.takeIf { it.isNotBlank() } ?: "HTTP ${resp.code}"
                 error("Error al descargar la lista: $message")
@@ -84,18 +92,14 @@ internal class PlaylistLoader {
 
         repeat(KeepAliveMaxAttempts) { attempt ->
             try {
-                val response = keepAliveClient.newCall(httpRequest).execute()
-                val ok = response.use { resp -> resp.code in 200..399 }
+                currentCoroutineContext().ensureActive()
+                val ok = keepAliveClient.newCall(httpRequest).readResponse { resp -> resp.code in 200..399 }
                 if (ok) return@withContext true
-            } catch (_: Throwable) {
+            } catch (_: IOException) {
                 // retry below
             }
             if (attempt < KeepAliveMaxAttempts - 1) {
-                try {
-                    Thread.sleep(400L * (attempt + 1))
-                } catch (_: InterruptedException) {
-                    return@withContext false
-                }
+                delay(400L * (attempt + 1))
             }
         }
         false
@@ -126,18 +130,42 @@ internal class PlaylistLoader {
                 .callTimeout(12, TimeUnit.SECONDS)
                 .build()
 
-            val response = validationClient.newCall(requestBuilder.build()).execute()
-            response.use { resp ->
+            validationClient.newCall(requestBuilder.build()).readResponse { resp ->
                 if (resp.code in 200..399) {
                     StreamValidation(reachable = true, contentType = resp.header("Content-Type"))
                 } else {
                     StreamValidation(reachable = false, error = "HTTP ${resp.code}", httpCode = resp.code)
                 }
             }
-        } catch (e: Throwable) {
+        } catch (e: IOException) {
             StreamValidation(reachable = false, error = e.message ?: "Error de conexión")
+        } catch (_: IllegalArgumentException) {
+            StreamValidation(reachable = false, error = "URL no válida")
         }
     }
+}
+
+/** Keep cancellation connected to the socket until the streamed body is consumed. */
+private suspend fun <T> Call.readResponse(block: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (continuation.isActive) continuation.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (!continuation.isActive) {
+                response.close()
+                return
+            }
+            try {
+                val value = response.use(block)
+                continuation.resumeWith(Result.success(value))
+            } catch (error: Exception) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
+        }
+    })
 }
 
 internal data class StreamValidation(

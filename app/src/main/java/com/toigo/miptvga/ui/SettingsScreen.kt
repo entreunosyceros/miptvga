@@ -328,14 +328,17 @@ internal fun SettingsScreen(
     }
 }
 
-@androidx.media3.common.util.UnstableApi
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 internal fun MaintenanceSection(vm: MainViewModel) {
     val storageInfo by vm.storageInfo.collectAsStateWithLifecycle()
+    val maintenanceMessage by vm.maintenanceMessage.collectAsStateWithLifecycle()
+    val maintenanceBusy by vm.maintenanceBusy.collectAsStateWithLifecycle()
+    val maintenanceUi by vm.uiState.collectAsStateWithLifecycle()
     var showResetPreferencesDialog by rememberSaveable { mutableStateOf(false) }
     var showResetAppDialog by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { vm.refreshStorageInfo() }
+    LaunchedEffect(maintenanceUi.playlistSource?.type, maintenanceUi.playlistSource?.value) { vm.refreshStorageInfo() }
 
     if (showResetPreferencesDialog) {
         AlertDialog(
@@ -396,7 +399,7 @@ internal fun MaintenanceSection(vm: MainViewModel) {
     ) {
         SectionTitle(
             title = "Mantenimiento",
-            subtitle = "Almacenamiento total: ${storageInfo.totalBytes.formatStorageSize()}"
+            subtitle = "Archivos de caché: ${storageInfo.total.label()}"
         )
 
         Row(
@@ -405,20 +408,26 @@ internal fun MaintenanceSection(vm: MainViewModel) {
         ) {
             StorageInfoCard(
                 label = "Caché reproducción",
-                size = storageInfo.playbackCacheBytes.formatStorageSize(),
+                size = storageInfo.playback.label(),
                 modifier = Modifier.weight(1f)
             )
             StorageInfoCard(
                 label = "Caché imágenes",
-                size = storageInfo.imageCacheBytes.formatStorageSize(),
+                size = storageInfo.images.label(),
                 modifier = Modifier.weight(1f)
             )
             StorageInfoCard(
-                label = "Otros datos",
-                size = storageInfo.appCacheBytes.formatStorageSize(),
+                label = "Temporales",
+                size = storageInfo.temporary.label(),
                 modifier = Modifier.weight(1f)
             )
         }
+
+        if (maintenanceMessage.isNotBlank()) Text(maintenanceMessage, color = SecondaryTextColor,
+            style = MaterialTheme.typography.bodyMedium)
+        Text("EPG/XMLTV: en memoria, sin caché de disco. Listas, favoritos y preferencias no están incluidos en estos tamaños ni se borran al limpiar cachés. Las imágenes incluyen memoria y disco. Se miden archivos de cacheDir; los journals de imágenes pueden permanecer y las bases internas de índices no se suman.",
+            color = SecondaryTextColor, style = MaterialTheme.typography.bodySmall)
+        AppActionButton(text = "Actualizar tamaños", onClick = vm::refreshStorageInfo, enabled = !maintenanceBusy)
 
         Text(
             text = "Limpieza de caché",
@@ -434,16 +443,19 @@ internal fun MaintenanceSection(vm: MainViewModel) {
             AppActionButton(
                 text = "Limpiar caché reproducción",
                 onClick = vm::clearPlaybackCache,
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
             AppActionButton(
                 text = "Limpiar caché imágenes",
                 onClick = vm::clearImageCache,
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
             AppActionButton(
                 text = "Limpiar todo el caché",
                 onClick = vm::clearAllCache,
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f),
                 primary = true
             )
@@ -463,11 +475,13 @@ internal fun MaintenanceSection(vm: MainViewModel) {
             AppActionButton(
                 text = "Restablecer preferencias",
                 onClick = { showResetPreferencesDialog = true },
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
             AppActionButton(
                 text = "Restablecer aplicación",
                 onClick = { showResetAppDialog = true },
+                enabled = !maintenanceBusy,
                 modifier = Modifier.weight(1f)
             )
         }

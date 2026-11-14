@@ -13,13 +13,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val MiptvgaColorScheme = darkColorScheme(
-    primary = Color(0xFF2F89D5),
-    onPrimary = Color(0xFFF7F9FF),
+    primary = Color(0xFF41D3B0),
+    onPrimary = Color(0xFF09231D),
     secondary = Color(0xFF9BA7BD),
     onSecondary = Color(0xFF0E1117),
-    background = Color(0xFF080B10),
+    background = Color(0xFF0D1117),
     onBackground = Color(0xFFF3F5F8),
-    surface = Color(0xFF11161D),
+    surface = Color(0xFF151D29),
     onSurface = Color(0xFFF3F5F8),
     surfaceVariant = Color(0xFF1A2230),
     onSurfaceVariant = Color(0xFFB5C0D4),

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.toigo.miptvga.focusedChannelName
 import com.toigo.miptvga.ChannelGroup
 import com.toigo.miptvga.ChannelListEntry
 import com.toigo.miptvga.CurrentProgram
@@ -370,11 +371,7 @@ internal fun ChannelRow(
                         maxLines = 1,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = if (selected || isFocused || isHovered) {
-                            Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                        } else {
-                            Modifier
-                        }
+                        modifier = Modifier.focusedChannelName(isFocused)
                     )
                     Text(
                         text = entry.groupTitle,
