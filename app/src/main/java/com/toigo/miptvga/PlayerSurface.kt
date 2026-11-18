@@ -81,12 +81,9 @@ private const val VlcVodFileCachingMs = 10_000
 private const val PlaybackSeekStepMillis = 10_000L
 private const val PlaybackStatePollingMillis = 500L
 private const val FullscreenTransitionGuardMillis = 1_100L
-/** Give IPTV panels time to free the previous client slot before opening the next stream. */
-private const val ChannelSwitchTeardownMillis = 350L
-private const val ChannelSwitchTeardownXtreamMillis = 500L
 private const val FullscreenTransitionRecoveryCheckMillis = 900L
-/** Ignore spurious EndReached storms that look like buffering pauses. */
-private const val MinLiveEndReconnectIntervalMillis = 8_000L
+/** Replenish an application retry budget only after sustained healthy playback. */
+private const val StablePlaybackBeforeRetryResetMillis = 8_000L
 private val ProgressiveVodExtensions = setOf(
     ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".aac", ".flac", ".wav", ".m4a", ".webm", ".ogg"
 )
@@ -95,6 +92,7 @@ private val ProgressiveVodExtensions = setOf(
 @Composable
 internal fun PlayerSurface(
     streamUrl: String,
+    playbackRequestId: Long = 0L,
     requestHeaders: Map<String, String>,
     playbackBackend: PlaybackBackend,
     videoCompatibilityMode: VideoCompatibilityMode,
@@ -106,13 +104,14 @@ internal fun PlayerSurface(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit,
-    onPlaybackError: (String?) -> Unit,
+    onPlaybackError: (PlaybackFailure) -> Unit,
     onPlaybackControllerStateChanged: (PlaybackControllerState) -> Unit,
     onPlaybackControllerActionsChanged: (PlaybackControllerActions) -> Unit
 ) {
     when (playbackBackend) {
         PlaybackBackend.VLC -> VlcPlayerSurface(
             streamUrl = streamUrl,
+            playbackRequestId = playbackRequestId,
             requestHeaders = requestHeaders,
             videoCompatibilityMode = videoCompatibilityMode,
             fullscreenTransitionToken = fullscreenTransitionToken,
@@ -130,6 +129,7 @@ internal fun PlayerSurface(
 
         PlaybackBackend.EXOPLAYER -> ExoPlayerSurface(
             streamUrl = streamUrl,
+            playbackRequestId = playbackRequestId,
             requestHeaders = requestHeaders,
             videoCompatibilityMode = videoCompatibilityMode,
             fullscreenTransitionToken = fullscreenTransitionToken,
@@ -151,6 +151,7 @@ internal fun PlayerSurface(
 @Composable
 private fun VlcPlayerSurface(
     streamUrl: String,
+    playbackRequestId: Long = 0L,
     requestHeaders: Map<String, String>,
     videoCompatibilityMode: VideoCompatibilityMode,
     fullscreenTransitionToken: Int,
@@ -161,11 +162,12 @@ private fun VlcPlayerSurface(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit,
-    onPlaybackError: (String?) -> Unit,
+    onPlaybackError: (PlaybackFailure) -> Unit,
     onPlaybackControllerStateChanged: (PlaybackControllerState) -> Unit,
     onPlaybackControllerActionsChanged: (PlaybackControllerActions) -> Unit
 ) {
     val applicationContext = LocalContext.current.applicationContext
+    PlaybackTrace.enabled = applicationContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
     val lifecycleOwner = LocalLifecycleOwner.current
     val playbackUrlInfo = remember(streamUrl) { analyzePlaybackUrl(streamUrl) }
     val currentOnInputActivity = rememberUpdatedState(onInputActivity)
@@ -180,22 +182,43 @@ private fun VlcPlayerSurface(
     val currentIsLiveStream = rememberUpdatedState(shouldApplyLivePlaybackHandling(playbackUrlInfo))
     val currentShouldReconnectAfterEnd = rememberUpdatedState(shouldReconnectAfterEnd(playbackUrlInfo))
     val currentShouldAutoReconnectOnFailure = rememberUpdatedState(shouldAutoReconnectOnFailure(playbackUrlInfo))
-    val reconnectAttempt = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
-    val endReconnectAttempt = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
-    val reconnectToken = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
-    val reconnectPending = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
-    val fullscreenTransitionActive = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
+    val sessionGate = remember { PlaybackSessionGate() }
+    val session = remember(streamUrl, requestHeaders, playbackRequestId) { PlaybackSessionGate.Session() }
+    val trace = remember(session) { PlaybackTrace(playbackRequestId, "VLC") }
+    val initialTransitionToken = remember(session) { fullscreenTransitionToken }
+    val retryBudget = remember(session) { PlaybackRetryBudget(StablePlaybackBeforeRetryResetMillis) }
+    val sessionPrepared = remember(session) { mutableStateOf(false) }
+    val terminalReported = remember(session) { mutableStateOf(false) }
+    val stopOnTerminal = remember(session) { mutableStateOf<() -> Unit>({}) }
+    val userPaused = remember(session) { mutableStateOf(false) }
+    val installSessionListener = remember(session) { mutableStateOf<() -> Unit>({}) }
+    fun reportSessionError(detail: String?, allowBackendFallback: Boolean = true) {
+        if (!sessionGate.isCurrent(session) || terminalReported.value) return
+        trace.event(PlaybackEvent.TERMINAL_ERROR)
+        terminalReported.value = true
+        sessionPrepared.value = false
+        runCatching { stopOnTerminal.value() }
+        currentOnPlaybackError.value(PlaybackFailure(detail, retryBudget.attempts + 1, allowBackendFallback))
+    }
+    val reconnectAttempt = remember(streamUrl, requestHeaders, playbackRequestId) { mutableIntStateOf(0) }
+    val reconnectToken = remember(streamUrl, requestHeaders, playbackRequestId) { mutableIntStateOf(0) }
+    val reconnectPending = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(false) }
+    val fullscreenTransitionActive = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(false) }
     // Do not key on streamUrl/headers: recomposition was resetting the surface and restarting playback.
     val surfaceReady = remember(videoCompatibilityMode) { mutableStateOf(false) }
-    val lastLiveEndReconnectAtMs = remember(streamUrl) { mutableStateOf(0L) }
-    val pointerTracker = remember(streamUrl, requestHeaders) { PointerActivityTracker() }
-    val playbackStateSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerState()) }
-    val playbackActionSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerActions()) }
+    val attachedLayout = remember { arrayOfNulls<VLCVideoLayout>(1) }
+    val pointerTracker = remember(streamUrl, requestHeaders, playbackRequestId) { PointerActivityTracker() }
+    val playbackStateSnapshot = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(PlaybackControllerState()) }
+    val playbackActionSnapshot = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(PlaybackControllerActions()) }
 
     fun requestSoftReconnect() {
-        if (currentStreamUrl.value.isBlank() || reconnectPending.value) return
+        if (!sessionGate.isCurrent(session) || terminalReported.value || currentStreamUrl.value.isBlank() || reconnectPending.value) return
+        if (!retryBudget.acquire(android.os.SystemClock.elapsedRealtime(), maxReconnectAttemptsForStream(currentStreamUrl.value, currentIsLiveStream.value))) {
+            reportSessionError("Se ha agotado el presupuesto de reconexión")
+            return
+        }
         reconnectPending.value = true
-        reconnectAttempt.intValue = 0
+        reconnectAttempt.intValue = retryBudget.attempts
         reconnectToken.intValue += 1
     }
 
@@ -212,12 +235,6 @@ private fun VlcPlayerSurface(
             )
         )
     }
-    DisposableEffect(libVlc) {
-        onDispose {
-            runCatching { libVlc.release() }
-        }
-    }
-
     // Reuse one MediaPlayer: recreating it every zap caused decoder/surface thrash and buffering.
     // Connection close is handled by stop + media=null before opening the next URL.
     val mediaPlayer = remember(libVlc) {
@@ -225,17 +242,17 @@ private fun VlcPlayerSurface(
             setVideoTrackEnabled(true)
         }
     }
-    val stableRequestHeaders = remember(streamUrl) { requestHeaders.toMap() }
+    val stableRequestHeaders = remember(streamUrl, requestHeaders) { requestHeaders.toMap() }
 
-    LaunchedEffect(fullscreenTransitionToken, streamUrl, stableRequestHeaders) {
-        if (fullscreenTransitionToken <= 0 || currentStreamUrl.value.isBlank()) return@LaunchedEffect
+    LaunchedEffect(fullscreenTransitionToken, session) {
+        if (fullscreenTransitionToken == initialTransitionToken || fullscreenTransitionToken <= 0 || currentStreamUrl.value.isBlank()) return@LaunchedEffect
 
         fullscreenTransitionActive.value = true
         kotlinx.coroutines.delay(FullscreenTransitionRecoveryCheckMillis)
         if (
             fullscreenTransitionActive.value &&
             !mediaPlayer.isPlaying &&
-            currentShouldAutoReconnectOnFailure.value
+            currentShouldAutoReconnectOnFailure.value && !userPaused.value
         ) {
             requestSoftReconnect()
         }
@@ -243,28 +260,44 @@ private fun VlcPlayerSurface(
         fullscreenTransitionActive.value = false
     }
 
-    DisposableEffect(mediaPlayer) {
+    DisposableEffect(mediaPlayer, session) {
+        sessionGate.activate(session)
+        trace.event(PlaybackEvent.SESSION_ACTIVE)
+        stopOnTerminal.value = { trace.stop { releaseVlcPlaybackSession(mediaPlayer, trace) }; Unit }
         val playbackActions = PlaybackControllerActions(
-            togglePlayPause = {
+            togglePlayPause = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value) return@playbackAction
+                if (!sessionPrepared.value) { userPaused.value = !userPaused.value; return@playbackAction }
                 if (mediaPlayer.isPlaying) {
+                    userPaused.value = true
+                    retryBudget.paused(android.os.SystemClock.elapsedRealtime())
                     mediaPlayer.pause()
                 } else {
+                    userPaused.value = false
                     mediaPlayer.play()
                 }
             },
-            play = {
+            play = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value) return@playbackAction
+                userPaused.value = false
+                if (!sessionPrepared.value) return@playbackAction
                 mediaPlayer.play()
             },
-            pause = {
+            pause = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value) return@playbackAction
+                userPaused.value = true
+                retryBudget.paused(android.os.SystemClock.elapsedRealtime())
                 mediaPlayer.pause()
             },
-            seekBack = {
+            seekBack = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value || !sessionPrepared.value) return@playbackAction
                 if (mediaPlayer.isSeekable()) {
                     val targetTime = (mediaPlayer.time - PlaybackSeekStepMillis).coerceAtLeast(0L)
                     mediaPlayer.time = targetTime
                 }
             },
-            seekForward = {
+            seekForward = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value || !sessionPrepared.value) return@playbackAction
                 if (mediaPlayer.isSeekable()) {
                     val maxDuration = mediaPlayer.length.takeIf { it > 0L } ?: Long.MAX_VALUE
                     val targetTime = (mediaPlayer.time + PlaybackSeekStepMillis).coerceAtMost(maxDuration)
@@ -275,16 +308,21 @@ private fun VlcPlayerSurface(
         playbackActionSnapshot.value = playbackActions
         currentOnPlaybackControllerActionsChanged.value(playbackActions)
         val listener = MediaPlayer.EventListener { event ->
+            if (!sessionGate.isCurrent(session) || terminalReported.value) return@EventListener
             when (event.type) {
+                MediaPlayer.Event.Opening -> trace.event(PlaybackEvent.OPENING)
                 MediaPlayer.Event.Playing -> {
-                    reconnectAttempt.intValue = 0
-                    endReconnectAttempt.intValue = 0
+                    trace.event(PlaybackEvent.PLAYING)
+                    retryBudget.playing(android.os.SystemClock.elapsedRealtime())
                     reconnectPending.value = false
                     fullscreenTransitionActive.value = false
                     currentOnPlaybackStarted.value()
                 }
 
+                MediaPlayer.Event.Paused -> { retryBudget.paused(android.os.SystemClock.elapsedRealtime()) }
+
                 MediaPlayer.Event.EndReached -> {
+                    if (reconnectPending.value) return@EventListener
                     val shouldReconnect =
                         shouldRecoverEndedPlayback(playbackUrlInfo) &&
                             currentStreamUrl.value.isNotBlank() &&
@@ -292,29 +330,25 @@ private fun VlcPlayerSurface(
 
                     if (shouldReconnect) {
                         val now = android.os.SystemClock.elapsedRealtime()
-                        val elapsed = now - lastLiveEndReconnectAtMs.value
-                        if (elapsed in 1 until MinLiveEndReconnectIntervalMillis) {
-                            // Spurious EndReached while the stream is still recovering: keep session.
+                        if (!retryBudget.acquire(now, maxReconnectAttemptsForStream(currentStreamUrl.value, currentIsLiveStream.value))) {
+                            reportSessionError("Se ha agotado el presupuesto de reconexión")
                             return@EventListener
                         }
-                        lastLiveEndReconnectAtMs.value = now
                         // Drop the slot, then reopen. Debounced so stalls don't look like buffering loops.
-                        releaseVlcPlaybackSession(mediaPlayer)
-                        if (fullscreenTransitionActive.value) {
-                            requestSoftReconnect()
-                        } else {
-                            reconnectPending.value = true
-                            reconnectAttempt.intValue += 1
-                            reconnectToken.intValue += 1
-                            currentOnReconnectScheduled.value()
-                        }
+                        releaseVlcPlaybackSession(mediaPlayer, trace)
+                        reconnectPending.value = true
+                        reconnectAttempt.intValue = retryBudget.attempts
+                        reconnectToken.intValue += 1
+                        currentOnReconnectScheduled.value()
                     } else {
-                        releaseVlcPlaybackSession(mediaPlayer)
+                        releaseVlcPlaybackSession(mediaPlayer, trace)
                         currentOnPlaybackEnded.value()
                     }
                 }
 
                 MediaPlayer.Event.EncounteredError -> {
+                    trace.event(PlaybackEvent.ENGINE_ERROR)
+                    if (reconnectPending.value) return@EventListener
                     val maxAttempts = maxReconnectAttemptsForStream(
                         url = currentStreamUrl.value,
                         isLive = currentIsLiveStream.value
@@ -323,59 +357,67 @@ private fun VlcPlayerSurface(
                         currentShouldAutoReconnectOnFailure.value &&
                         currentStreamUrl.value.isNotBlank() &&
                         !reconnectPending.value &&
-                        reconnectAttempt.intValue < maxAttempts
+                        retryBudget.acquire(android.os.SystemClock.elapsedRealtime(), maxAttempts)
                     ) {
-                        if (fullscreenTransitionActive.value) {
-                            requestSoftReconnect()
-                        } else {
-                            reconnectPending.value = true
-                            reconnectAttempt.intValue += 1
-                            reconnectToken.intValue += 1
-                            currentOnReconnectScheduled.value()
-                        }
+                        reconnectPending.value = true
+                        reconnectAttempt.intValue = retryBudget.attempts
+                        reconnectToken.intValue += 1
+                        currentOnReconnectScheduled.value()
                     } else {
-                        currentOnPlaybackError.value("Error al reproducir con VLC")
+                        reportSessionError("Error al reproducir con VLC")
                     }
                 }
 
                 else -> Unit
             }
         }
-        mediaPlayer.setEventListener(listener)
+        installSessionListener.value = { mediaPlayer.setEventListener(listener) }
         onDispose {
-            currentOnPlaybackControllerActionsChanged.value(PlaybackControllerActions())
-            currentOnPlaybackControllerStateChanged.value(PlaybackControllerState())
-            playbackActionSnapshot.value = PlaybackControllerActions()
-            playbackStateSnapshot.value = PlaybackControllerState()
-            mediaPlayer.setEventListener(null)
-            releaseVlcPlaybackSession(mediaPlayer)
-            runCatching { mediaPlayer.detachViews() }
-            runCatching { mediaPlayer.release() }
+            val owned = sessionGate.retire(session) {
+                mediaPlayer.setEventListener(null)
+                trace.stop { releaseVlcPlaybackSession(mediaPlayer, trace) }
+            }
+            trace.event(PlaybackEvent.SESSION_RETIRED)
+            if (owned) {
+                currentOnPlaybackControllerActionsChanged.value(PlaybackControllerActions())
+                currentOnPlaybackControllerStateChanged.value(PlaybackControllerState())
+            }
         }
     }
 
-    LaunchedEffect(mediaPlayer, streamUrl, requestHeaders) {
+    DisposableEffect(mediaPlayer, libVlc) {
+        onDispose {
+            mediaPlayer.setEventListener(null)
+            releaseVlcPlaybackSession(mediaPlayer, trace)
+            runCatching { mediaPlayer.detachViews() }
+            runCatching { mediaPlayer.release() }
+            runCatching { libVlc.release() }
+        }
+    }
+
+    LaunchedEffect(mediaPlayer, session) {
         while (true) {
-            val playbackState = PlaybackControllerState(
+            val playbackState = if (sessionPrepared.value) PlaybackControllerState(
                 isPlaying = mediaPlayer.isPlaying,
                 canPause = mediaPlayer.isPlaying || currentStreamUrl.value.isNotBlank(),
                 canSeek = mediaPlayer.isSeekable() && mediaPlayer.length > 0L,
                 isLive = currentIsLiveStream.value,
                 positionMs = mediaPlayer.time.coerceAtLeast(0L),
                 durationMs = mediaPlayer.length.coerceAtLeast(0L)
-            )
+            ) else PlaybackControllerState()
             playbackStateSnapshot.value = playbackState
             currentOnPlaybackControllerStateChanged.value(playbackState)
             kotlinx.coroutines.delay(PlaybackStatePollingMillis)
         }
     }
 
-    DisposableEffect(lifecycleOwner, mediaPlayer, applicationContext) {
+    DisposableEffect(lifecycleOwner, mediaPlayer, applicationContext, session) {
         var shouldResumeOnStart = mediaPlayer.isPlaying
         var playbackStoppedForSleep = false
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
+                    retryBudget.paused(android.os.SystemClock.elapsedRealtime())
                     shouldResumeOnStart = mediaPlayer.isPlaying
                     if (mediaPlayer.isPlaying) {
                         mediaPlayer.pause()
@@ -387,12 +429,11 @@ private fun VlcPlayerSurface(
                         shouldResumeOnStart = false
                         reconnectPending.value = false
                         reconnectAttempt.intValue = 0
-                        endReconnectAttempt.intValue = 0
-                        releaseVlcPlaybackSession(mediaPlayer)
+                        releaseVlcPlaybackSession(mediaPlayer, trace)
                     }
                 }
                 Lifecycle.Event.ON_RESUME -> {
-                    if (!playbackStoppedForSleep && shouldResumeOnStart) {
+                    if (!terminalReported.value && !playbackStoppedForSleep && shouldResumeOnStart) {
                         runCatching { mediaPlayer.play() }
                     }
                     playbackStoppedForSleep = false
@@ -406,69 +447,81 @@ private fun VlcPlayerSurface(
         }
     }
 
-    LaunchedEffect(mediaPlayer, streamUrl, stableRequestHeaders, reconnectToken.intValue) {
-        val sanitizedUrl = streamUrl.trim()
-        if (sanitizedUrl.isBlank()) {
-            releaseVlcPlaybackSession(mediaPlayer)
-            return@LaunchedEffect
-        }
-
-        // Wait for the video surface without putting surfaceReady in the effect keys
-        // (that was restarting playback and looked like buffering every few seconds).
-        snapshotFlow { surfaceReady.value }.first { it }
-
-        val shouldDelayReconnect = reconnectPending.value && reconnectAttempt.intValue > 0
-        if (shouldDelayReconnect) {
-            kotlinx.coroutines.delay(
-                reconnectDelayMillis(
-                    attempt = reconnectAttempt.intValue,
-                    xtream = isXtreamStreamUrl(sanitizedUrl)
-                )
-            )
-        }
-
-        // Close previous HTTP/TS session, then open the new URL.
-        releaseVlcPlaybackSession(mediaPlayer)
-        if (!shouldDelayReconnect) {
-            kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
-        }
-
-        runCatching {
-            reconnectPending.value = false
-            val media = Media(libVlc, normalizePlaybackUri(sanitizedUrl)).apply {
-                setHWDecoderEnabled(true, false)
-                addOption(":http-reconnect=true")
-                addOption(":network-caching=$VlcNetworkCachingMs")
-                addOption(":live-caching=$VlcLiveCachingMs")
-                addOption(":file-caching=$VlcFileCachingMs")
-                addVlcHeaderOptions(stableRequestHeaders)
-                addPlaybackSpecificOptions(sanitizedUrl)
+    LaunchedEffect(mediaPlayer, session, reconnectToken.intValue) {
+        try {
+            val sanitizedUrl = streamUrl.trim()
+            if (sanitizedUrl.isBlank()) {
+                releaseVlcPlaybackSession(mediaPlayer, trace)
+                return@LaunchedEffect
             }
-            mediaPlayer.media = media
-            media.release()
-            mediaPlayer.play()
-        }.onFailure { error ->
-            val maxAttempts = maxReconnectAttemptsForStream(
-                url = currentStreamUrl.value,
-                isLive = currentIsLiveStream.value
-            )
-            if (
-                currentShouldAutoReconnectOnFailure.value &&
-                currentStreamUrl.value.isNotBlank() &&
-                !reconnectPending.value &&
-                reconnectAttempt.intValue < maxAttempts
-            ) {
-                if (fullscreenTransitionActive.value) {
-                    requestSoftReconnect()
-                } else {
+
+            if (!sessionGate.isCurrent(session) || terminalReported.value) return@LaunchedEffect
+            mediaPlayer.setEventListener(null)
+            sessionPrepared.value = false
+            if (!trace.stop { check(releaseVlcPlaybackSession(mediaPlayer, trace)) }) {
+                reportSessionError("No se pudo detener la reproducción anterior", allowBackendFallback = false)
+                return@LaunchedEffect
+            }
+            // Wait for the video surface without putting surfaceReady in the effect keys
+            // (that was restarting playback and looked like buffering every few seconds).
+            snapshotFlow { surfaceReady.value }.first { it }
+
+            val shouldDelayReconnect = reconnectPending.value && reconnectAttempt.intValue > 0
+            if (shouldDelayReconnect) {
+                val delayMs = reconnectDelayMillis(reconnectAttempt.intValue, isXtreamStreamUrl(sanitizedUrl))
+                trace.event(PlaybackEvent.RETRY_WAIT, reconnectAttempt.intValue, delayMs)
+                kotlinx.coroutines.delay(delayMs)
+            }
+
+            if (shouldDelayReconnect && !reconnectPending.value) return@LaunchedEffect
+            lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+            snapshotFlow { !userPaused.value || terminalReported.value }.first { it }
+            if (!sessionGate.isCurrent(session) || terminalReported.value) return@LaunchedEffect
+            trace.event(PlaybackEvent.PREPARE, reconnectAttempt.intValue)
+            runCatching {
+                reconnectPending.value = false
+                val media = Media(libVlc, normalizePlaybackUri(sanitizedUrl))
+                try {
+                    media.setHWDecoderEnabled(true, false)
+                    media.addOption(":http-reconnect=true")
+                    media.addOption(":network-caching=$VlcNetworkCachingMs")
+                    media.addOption(":live-caching=$VlcLiveCachingMs")
+                    media.addOption(":file-caching=$VlcFileCachingMs")
+                    media.addVlcHeaderOptions(stableRequestHeaders)
+                    media.addPlaybackSpecificOptions(sanitizedUrl)
+                    mediaPlayer.media = media
+                    installSessionListener.value()
+                } finally {
+                    media.release()
+                }
+                sessionPrepared.value = true
+                trace.event(PlaybackEvent.PLAY_REQUEST)
+                mediaPlayer.play()
+            }.onFailure { error ->
+                trace.event(PlaybackEvent.START_ERROR)
+                val maxAttempts = maxReconnectAttemptsForStream(
+                    url = currentStreamUrl.value,
+                    isLive = currentIsLiveStream.value
+                )
+                if (
+                    currentShouldAutoReconnectOnFailure.value &&
+                    currentStreamUrl.value.isNotBlank() &&
+                    !reconnectPending.value &&
+                    retryBudget.acquire(android.os.SystemClock.elapsedRealtime(), maxAttempts)
+                ) {
                     reconnectPending.value = true
-                    reconnectAttempt.intValue += 1
+                    reconnectAttempt.intValue = retryBudget.attempts
                     reconnectToken.intValue += 1
                     currentOnReconnectScheduled.value()
+                } else {
+                    reportSessionError(error.localizedMessage ?: error.message ?: "Error al iniciar la reproducción")
                 }
-            } else {
-                currentOnPlaybackError.value(error.localizedMessage ?: error.message ?: "Error al iniciar la reproducción")
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            trace.event(PlaybackEvent.PREPARATION_TASK_CANCELLED)
+            throw cancelled
+        } finally {
+            trace.event(PlaybackEvent.PREPARATION_TASK_FINISHED)
         }
     }
 
@@ -505,6 +558,7 @@ private fun VlcPlayerSurface(
                     runCatching { mediaPlayer.detachViews() }
                     runCatching {
                         mediaPlayer.attachViews(this, null, false, false)
+                        attachedLayout[0] = this
                         surfaceReady.value = true
                     }
                     setOnTouchListener { view, event ->
@@ -515,12 +569,23 @@ private fun VlcPlayerSurface(
                     }
                 }
             },
+            onReset = null,
+            onRelease = { videoLayout ->
+                videoLayout.setOnTouchListener(null)
+                videoLayout.setOnGenericMotionListener(null)
+                if (attachedLayout[0] === videoLayout) {
+                    runCatching { mediaPlayer.detachViews() }
+                    attachedLayout[0] = null
+                    surfaceReady.value = false
+                }
+            },
             update = { videoLayout ->
                 videoLayout.keepScreenOn = true
                 if (!surfaceReady.value) {
                     runCatching {
                         mediaPlayer.detachViews()
                         mediaPlayer.attachViews(videoLayout, null, false, false)
+                        attachedLayout[0] = videoLayout
                         surfaceReady.value = true
                     }
                 }
@@ -533,6 +598,7 @@ private fun VlcPlayerSurface(
 @Composable
 private fun ExoPlayerSurface(
     streamUrl: String,
+    playbackRequestId: Long = 0L,
     requestHeaders: Map<String, String>,
     videoCompatibilityMode: VideoCompatibilityMode,
     fullscreenTransitionToken: Int,
@@ -543,11 +609,12 @@ private fun ExoPlayerSurface(
     onReconnectScheduled: () -> Unit,
     onPlaybackStarted: () -> Unit,
     onPlaybackEnded: () -> Unit,
-    onPlaybackError: (String?) -> Unit,
+    onPlaybackError: (PlaybackFailure) -> Unit,
     onPlaybackControllerStateChanged: (PlaybackControllerState) -> Unit,
     onPlaybackControllerActionsChanged: (PlaybackControllerActions) -> Unit
 ) {
     val applicationContext = LocalContext.current.applicationContext
+    PlaybackTrace.enabled = applicationContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
     val lifecycleOwner = LocalLifecycleOwner.current
     val playbackUrlInfo = remember(streamUrl) { analyzePlaybackUrl(streamUrl) }
     val currentOnInputActivity = rememberUpdatedState(onInputActivity)
@@ -562,15 +629,30 @@ private fun ExoPlayerSurface(
     val currentIsLiveStream = rememberUpdatedState(shouldApplyLivePlaybackHandling(playbackUrlInfo))
     val currentShouldReconnectAfterEnd = rememberUpdatedState(shouldReconnectAfterEnd(playbackUrlInfo))
     val currentShouldAutoReconnectOnFailure = rememberUpdatedState(shouldAutoReconnectOnFailure(playbackUrlInfo))
-    val reconnectAttempt = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
-    val endReconnectAttempt = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
-    val reconnectToken = remember(streamUrl, requestHeaders) { mutableIntStateOf(0) }
-    val reconnectPending = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
-    val fullscreenTransitionActive = remember(streamUrl, requestHeaders) { mutableStateOf(false) }
-    val lastLiveEndReconnectAtMs = remember(streamUrl) { mutableStateOf(0L) }
-    val pointerTracker = remember(streamUrl, requestHeaders) { PointerActivityTracker() }
-    val playbackStateSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerState()) }
-    val playbackActionSnapshot = remember(streamUrl, requestHeaders) { mutableStateOf(PlaybackControllerActions()) }
+    val sessionGate = remember { PlaybackSessionGate() }
+    val session = remember(streamUrl, requestHeaders, playbackRequestId) { PlaybackSessionGate.Session() }
+    val trace = remember(session) { PlaybackTrace(playbackRequestId, "EXOPLAYER") }
+    val initialTransitionToken = remember(session) { fullscreenTransitionToken }
+    val retryBudget = remember(session) { PlaybackRetryBudget(StablePlaybackBeforeRetryResetMillis) }
+    val sessionPrepared = remember(session) { mutableStateOf(false) }
+    val terminalReported = remember(session) { mutableStateOf(false) }
+    val stopOnTerminal = remember(session) { mutableStateOf<() -> Unit>({}) }
+    val userPaused = remember(session) { mutableStateOf(false) }
+    fun reportSessionError(detail: String?, allowBackendFallback: Boolean = true) {
+        if (!sessionGate.isCurrent(session) || terminalReported.value) return
+        trace.event(PlaybackEvent.TERMINAL_ERROR)
+        terminalReported.value = true
+        sessionPrepared.value = false
+        runCatching { stopOnTerminal.value() }
+        currentOnPlaybackError.value(PlaybackFailure(detail, retryBudget.attempts + 1, allowBackendFallback))
+    }
+    val reconnectAttempt = remember(streamUrl, requestHeaders, playbackRequestId) { mutableIntStateOf(0) }
+    val reconnectToken = remember(streamUrl, requestHeaders, playbackRequestId) { mutableIntStateOf(0) }
+    val reconnectPending = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(false) }
+    val fullscreenTransitionActive = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(false) }
+    val pointerTracker = remember(streamUrl, requestHeaders, playbackRequestId) { PointerActivityTracker() }
+    val playbackStateSnapshot = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(PlaybackControllerState()) }
+    val playbackActionSnapshot = remember(streamUrl, requestHeaders, playbackRequestId) { mutableStateOf(PlaybackControllerActions()) }
     val playerAudioAttributes = remember {
         AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
@@ -579,7 +661,7 @@ private fun ExoPlayerSurface(
     }
     val usePlaybackCache = remember(streamUrl) { shouldUsePlaybackCache(streamUrl) }
     val effectiveRequestHeaders = remember(requestHeaders) { ensureIptvHeaders(requestHeaders) }
-    val stableRequestHeaders = remember(streamUrl) { effectiveRequestHeaders }
+    val stableRequestHeaders = remember(streamUrl, effectiveRequestHeaders) { effectiveRequestHeaders }
     // Keep one ExoPlayer instance across zapping. Recreating per URL briefly overlaps
     // two network sessions and trips single-connection IPTV panels.
     val exoPlayer = remember(applicationContext) {
@@ -598,21 +680,25 @@ private fun ExoPlayerSurface(
     }
 
     fun requestSoftReconnect() {
-        if (currentStreamUrl.value.isBlank() || reconnectPending.value) return
+        if (!sessionGate.isCurrent(session) || terminalReported.value || currentStreamUrl.value.isBlank() || reconnectPending.value) return
+        if (!retryBudget.acquire(android.os.SystemClock.elapsedRealtime(), maxReconnectAttemptsForStream(currentStreamUrl.value, currentIsLiveStream.value))) {
+            reportSessionError("Se ha agotado el presupuesto de reconexión")
+            return
+        }
         reconnectPending.value = true
-        reconnectAttempt.intValue = 0
+        reconnectAttempt.intValue = retryBudget.attempts
         reconnectToken.intValue += 1
     }
 
-    LaunchedEffect(fullscreenTransitionToken, streamUrl, stableRequestHeaders) {
-        if (fullscreenTransitionToken <= 0 || currentStreamUrl.value.isBlank()) return@LaunchedEffect
+    LaunchedEffect(fullscreenTransitionToken, session) {
+        if (fullscreenTransitionToken == initialTransitionToken || fullscreenTransitionToken <= 0 || currentStreamUrl.value.isBlank()) return@LaunchedEffect
 
         fullscreenTransitionActive.value = true
         kotlinx.coroutines.delay(FullscreenTransitionRecoveryCheckMillis)
         val needsRecovery =
             fullscreenTransitionActive.value &&
                 !exoPlayer.isPlaying &&
-                currentShouldAutoReconnectOnFailure.value &&
+                currentShouldAutoReconnectOnFailure.value && !userPaused.value &&
                 exoPlayer.playbackState != Player.STATE_READY
         if (needsRecovery) {
             requestSoftReconnect()
@@ -621,29 +707,48 @@ private fun ExoPlayerSurface(
         fullscreenTransitionActive.value = false
     }
 
-    DisposableEffect(exoPlayer) {
+    DisposableEffect(exoPlayer, session) {
+        sessionGate.activate(session)
+        trace.event(PlaybackEvent.SESSION_ACTIVE)
+        stopOnTerminal.value = {
+            trace.stop { exoPlayer.playWhenReady = false; exoPlayer.stop(); exoPlayer.clearMediaItems() }
+            Unit
+        }
         val playbackActions = PlaybackControllerActions(
-            togglePlayPause = {
+            togglePlayPause = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value) return@playbackAction
+                if (!sessionPrepared.value) { userPaused.value = !userPaused.value; return@playbackAction }
                 if (exoPlayer.isPlaying) {
+                    userPaused.value = true
+                    retryBudget.paused(android.os.SystemClock.elapsedRealtime())
                     exoPlayer.pause()
                 } else {
+                    userPaused.value = false
                     exoPlayer.playWhenReady = true
                     exoPlayer.play()
                 }
             },
-            play = {
+            play = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value) return@playbackAction
+                userPaused.value = false
+                if (!sessionPrepared.value) return@playbackAction
                 exoPlayer.playWhenReady = true
                 exoPlayer.play()
             },
-            pause = {
+            pause = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value) return@playbackAction
+                userPaused.value = true
+                retryBudget.paused(android.os.SystemClock.elapsedRealtime())
                 exoPlayer.pause()
             },
-            seekBack = {
+            seekBack = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value || !sessionPrepared.value) return@playbackAction
                 if (exoPlayer.isCurrentMediaItemSeekable) {
                     exoPlayer.seekTo((exoPlayer.currentPosition - PlaybackSeekStepMillis).coerceAtLeast(0L))
                 }
             },
-            seekForward = {
+            seekForward = playbackAction@{
+                if (!sessionGate.isCurrent(session) || terminalReported.value || !sessionPrepared.value) return@playbackAction
                 if (exoPlayer.isCurrentMediaItemSeekable) {
                     val duration = exoPlayer.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
                     exoPlayer.seekTo((exoPlayer.currentPosition + PlaybackSeekStepMillis).coerceAtMost(duration))
@@ -653,38 +758,48 @@ private fun ExoPlayerSurface(
         playbackActionSnapshot.value = playbackActions
         currentOnPlaybackControllerActionsChanged.value(playbackActions)
         val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!sessionGate.isCurrent(session) || terminalReported.value ||
+                    exoPlayer.currentMediaItem?.mediaId != playbackRequestId.toString()) return
+                if (isPlaying) trace.event(PlaybackEvent.PLAYING)
+                if (isPlaying) retryBudget.playing(android.os.SystemClock.elapsedRealtime())
+                else retryBudget.paused(android.os.SystemClock.elapsedRealtime())
+            }
+            override fun onRenderedFirstFrame() {
+                if (sessionGate.isCurrent(session) && !terminalReported.value && sessionPrepared.value &&
+                    exoPlayer.currentMediaItem?.mediaId == playbackRequestId.toString())
+                    trace.event(PlaybackEvent.FIRST_FRAME)
+            }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (!sessionGate.isCurrent(session) || terminalReported.value ||
+                    exoPlayer.currentMediaItem?.mediaId != playbackRequestId.toString()) return
                 if (playbackState == Player.STATE_READY) {
-                    reconnectAttempt.intValue = 0
-                    endReconnectAttempt.intValue = 0
+                    trace.event(PlaybackEvent.READY)
+                    // READY is not proof of sustained playback; onIsPlayingChanged tracks it.
                     reconnectPending.value = false
                     fullscreenTransitionActive.value = false
                     currentOnPlaybackStarted.value()
                 } else if (playbackState == Player.STATE_ENDED) {
+                    if (reconnectPending.value) return
                     val shouldReconnect =
                         shouldRecoverEndedPlayback(playbackUrlInfo) &&
                             currentStreamUrl.value.isNotBlank() &&
                             !reconnectPending.value
                     if (shouldReconnect) {
                         val now = android.os.SystemClock.elapsedRealtime()
-                        val elapsed = now - lastLiveEndReconnectAtMs.value
-                        if (elapsed in 1 until MinLiveEndReconnectIntervalMillis) {
+                        if (!retryBudget.acquire(now, maxReconnectAttemptsForStream(currentStreamUrl.value, currentIsLiveStream.value))) {
+                            reportSessionError("Se ha agotado el presupuesto de reconexión")
                             return
                         }
-                        lastLiveEndReconnectAtMs.value = now
                         runCatching {
                             exoPlayer.playWhenReady = false
                             exoPlayer.stop()
                             exoPlayer.clearMediaItems()
                         }
-                        if (fullscreenTransitionActive.value) {
-                            requestSoftReconnect()
-                        } else {
-                            reconnectPending.value = true
-                            reconnectAttempt.intValue += 1
-                            reconnectToken.intValue += 1
-                            currentOnReconnectScheduled.value()
-                        }
+                        reconnectPending.value = true
+                        reconnectAttempt.intValue = retryBudget.attempts
+                        reconnectToken.intValue += 1
+                        currentOnReconnectScheduled.value()
                     } else {
                         runCatching {
                             exoPlayer.playWhenReady = false
@@ -697,6 +812,14 @@ private fun ExoPlayerSurface(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (sessionGate.isCurrent(session)) trace.event(PlaybackEvent.ENGINE_ERROR, error.errorCode)
+                if (reconnectPending.value) return
+                if (!sessionGate.isCurrent(session) || terminalReported.value ||
+                    exoPlayer.currentMediaItem?.mediaId != playbackRequestId.toString()) return
+                if (isPermanentPlaybackFailure(error)) {
+                    reportSessionError("El servidor ha rechazado esta reproducción", allowBackendFallback = false)
+                    return
+                }
                 val maxAttempts = maxReconnectAttemptsForStream(
                     url = currentStreamUrl.value,
                     isLive = currentIsLiveStream.value,
@@ -706,59 +829,74 @@ private fun ExoPlayerSurface(
                     currentShouldAutoReconnectOnFailure.value &&
                     currentStreamUrl.value.isNotBlank() &&
                     !reconnectPending.value &&
-                    reconnectAttempt.intValue < maxAttempts
+                    retryBudget.acquire(android.os.SystemClock.elapsedRealtime(), maxAttempts)
                 ) {
-                    if (fullscreenTransitionActive.value) {
-                        requestSoftReconnect()
-                    } else {
-                        reconnectPending.value = true
-                        reconnectAttempt.intValue += 1
-                        reconnectToken.intValue += 1
-                        currentOnReconnectScheduled.value()
-                    }
+                    reconnectPending.value = true
+                    reconnectAttempt.intValue = retryBudget.attempts
+                    reconnectToken.intValue += 1
+                    currentOnReconnectScheduled.value()
                 } else {
-                    currentOnPlaybackError.value(formatPlaybackError(error))
+                    reportSessionError(formatPlaybackError(error))
                 }
             }
         }
         exoPlayer.addListener(listener)
         onDispose {
-            currentOnPlaybackControllerActionsChanged.value(PlaybackControllerActions())
-            currentOnPlaybackControllerStateChanged.value(PlaybackControllerState())
-            playbackActionSnapshot.value = PlaybackControllerActions()
-            playbackStateSnapshot.value = PlaybackControllerState()
             exoPlayer.removeListener(listener)
-            runCatching {
-                exoPlayer.playWhenReady = false
-                exoPlayer.stop()
-                exoPlayer.clearMediaItems()
+            val owned = sessionGate.retire(session) {
+                trace.stop {
+                    exoPlayer.playWhenReady = false
+                    exoPlayer.stop()
+                    exoPlayer.clearMediaItems()
+                }
             }
-            exoPlayer.release()
+            trace.event(PlaybackEvent.SESSION_RETIRED)
+            if (owned) {
+                currentOnPlaybackControllerActionsChanged.value(PlaybackControllerActions())
+                currentOnPlaybackControllerStateChanged.value(PlaybackControllerState())
+            }
         }
     }
 
-    LaunchedEffect(exoPlayer, streamUrl, requestHeaders) {
+    DisposableEffect(exoPlayer) {
+        PlaybackCache.acquireReader()
+        onDispose {
+            try {
+                runCatching {
+                    exoPlayer.playWhenReady = false
+                    exoPlayer.stop()
+                    exoPlayer.clearMediaItems()
+                }
+            } finally {
+                try { exoPlayer.release() }
+                finally { PlaybackCache.releaseReader(applicationContext) }
+            }
+        }
+    }
+
+    LaunchedEffect(exoPlayer, session) {
         while (true) {
-            val playbackState = PlaybackControllerState(
+            val playbackState = if (sessionPrepared.value) PlaybackControllerState(
                 isPlaying = exoPlayer.isPlaying,
                 canPause = exoPlayer.mediaItemCount > 0,
                 canSeek = exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0L,
                 isLive = currentIsLiveStream.value || exoPlayer.isCurrentMediaItemLive,
                 positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
                 durationMs = exoPlayer.duration.takeIf { it > 0L }?.coerceAtLeast(0L) ?: 0L
-            )
+            ) else PlaybackControllerState()
             playbackStateSnapshot.value = playbackState
             currentOnPlaybackControllerStateChanged.value(playbackState)
             kotlinx.coroutines.delay(PlaybackStatePollingMillis)
         }
     }
 
-    DisposableEffect(lifecycleOwner, exoPlayer, applicationContext) {
+    DisposableEffect(lifecycleOwner, exoPlayer, applicationContext, session) {
         var shouldResumeOnStart = exoPlayer.playWhenReady
         var playbackStoppedForSleep = false
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
+                    retryBudget.paused(android.os.SystemClock.elapsedRealtime())
                     shouldResumeOnStart = exoPlayer.isPlaying || exoPlayer.playWhenReady
                     exoPlayer.pause()
                 }
@@ -768,14 +906,13 @@ private fun ExoPlayerSurface(
                         shouldResumeOnStart = false
                         reconnectPending.value = false
                         reconnectAttempt.intValue = 0
-                        endReconnectAttempt.intValue = 0
                         exoPlayer.playWhenReady = false
                         exoPlayer.stop()
                         exoPlayer.clearMediaItems()
                     }
                 }
                 Lifecycle.Event.ON_RESUME -> {
-                    if (!playbackStoppedForSleep && shouldResumeOnStart && exoPlayer.mediaItemCount > 0) {
+                    if (!terminalReported.value && !playbackStoppedForSleep && shouldResumeOnStart && exoPlayer.mediaItemCount > 0) {
                         exoPlayer.playWhenReady = true
                         exoPlayer.play()
                     }
@@ -790,71 +927,81 @@ private fun ExoPlayerSurface(
         }
     }
 
-    LaunchedEffect(exoPlayer, streamUrl, stableRequestHeaders, reconnectToken.intValue) {
-        val sanitizedUrl = streamUrl.trim()
-        if (sanitizedUrl.isBlank()) {
-            exoPlayer.playWhenReady = false
-            exoPlayer.stop()
-            exoPlayer.clearMediaItems()
-            return@LaunchedEffect
-        }
+    LaunchedEffect(exoPlayer, session, reconnectToken.intValue) {
+        try {
+            val sanitizedUrl = streamUrl.trim()
+            if (sanitizedUrl.isBlank()) {
+                exoPlayer.playWhenReady = false
+                exoPlayer.stop()
+                exoPlayer.clearMediaItems()
+                return@LaunchedEffect
+            }
 
-        val shouldDelayReconnect = reconnectPending.value && reconnectAttempt.intValue > 0
-        if (shouldDelayReconnect) {
-            kotlinx.coroutines.delay(
-                reconnectDelayMillis(
-                    attempt = reconnectAttempt.intValue,
-                    xtream = isXtreamStreamUrl(sanitizedUrl)
+            if (!sessionGate.isCurrent(session) || terminalReported.value) return@LaunchedEffect
+            sessionPrepared.value = false
+            if (!trace.stop {
+                exoPlayer.playWhenReady = false
+                exoPlayer.stop()
+                exoPlayer.clearMediaItems()
+            }) {
+                reportSessionError("No se pudo detener la reproducción anterior", allowBackendFallback = false)
+                return@LaunchedEffect
+            }
+
+            val shouldDelayReconnect = reconnectPending.value && reconnectAttempt.intValue > 0
+            if (shouldDelayReconnect) {
+                val delayMs = reconnectDelayMillis(reconnectAttempt.intValue, isXtreamStreamUrl(sanitizedUrl))
+                trace.event(PlaybackEvent.RETRY_WAIT, reconnectAttempt.intValue, delayMs)
+                kotlinx.coroutines.delay(delayMs)
+            }
+
+            if (shouldDelayReconnect && !reconnectPending.value) return@LaunchedEffect
+            lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+            snapshotFlow { !userPaused.value || terminalReported.value }.first { it }
+            if (!sessionGate.isCurrent(session) || terminalReported.value) return@LaunchedEffect
+            trace.event(PlaybackEvent.PREPARE, reconnectAttempt.intValue)
+            runCatching {
+                reconnectPending.value = false
+                val dataSourceFactory = PlaybackCache.createDataSourceFactory(
+                    context = applicationContext,
+                    requestHeaders = stableRequestHeaders,
+                    useCache = usePlaybackCache,
+                    trace = trace
                 )
-            )
-        }
-
-        runCatching {
-            // Tear down the previous session before preparing the next channel.
-            exoPlayer.playWhenReady = false
-            exoPlayer.stop()
-            exoPlayer.clearMediaItems()
-        }
-
-        if (!shouldDelayReconnect) {
-            kotlinx.coroutines.delay(channelSwitchTeardownMillis(sanitizedUrl))
-        }
-
-        runCatching {
-            reconnectPending.value = false
-            val dataSourceFactory = PlaybackCache.createDataSourceFactory(
-                context = applicationContext,
-                requestHeaders = stableRequestHeaders,
-                useCache = usePlaybackCache
-            )
-            val mediaSource = DefaultMediaSourceFactory(dataSourceFactory)
-                .createMediaSource(buildMediaItem(sanitizedUrl, playbackUrlInfo))
-            exoPlayer.setMediaSource(mediaSource, /* resetPosition = */ true)
-            exoPlayer.prepare()
-            exoPlayer.playWhenReady = true
-            exoPlayer.play()
-        }.onFailure { error ->
-            val maxAttempts = maxReconnectAttemptsForStream(
-                url = currentStreamUrl.value,
-                isLive = currentIsLiveStream.value
-            )
-            if (
-                currentShouldAutoReconnectOnFailure.value &&
-                currentStreamUrl.value.isNotBlank() &&
-                !reconnectPending.value &&
-                reconnectAttempt.intValue < maxAttempts
-            ) {
-                if (fullscreenTransitionActive.value) {
-                    requestSoftReconnect()
-                } else {
+                val mediaSource = DefaultMediaSourceFactory(dataSourceFactory)
+                    .createMediaSource(buildMediaItem(sanitizedUrl, playbackUrlInfo).buildUpon()
+                        .setMediaId(playbackRequestId.toString()).build())
+                exoPlayer.setMediaSource(mediaSource, /* resetPosition = */ true)
+                sessionPrepared.value = true
+                trace.event(PlaybackEvent.PLAY_REQUEST)
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = true
+                exoPlayer.play()
+            }.onFailure { error ->
+                trace.event(PlaybackEvent.START_ERROR)
+                val maxAttempts = maxReconnectAttemptsForStream(
+                    url = currentStreamUrl.value,
+                    isLive = currentIsLiveStream.value
+                )
+                if (
+                    currentShouldAutoReconnectOnFailure.value &&
+                    currentStreamUrl.value.isNotBlank() &&
+                    !reconnectPending.value &&
+                    retryBudget.acquire(android.os.SystemClock.elapsedRealtime(), maxAttempts)
+                ) {
                     reconnectPending.value = true
-                    reconnectAttempt.intValue += 1
+                    reconnectAttempt.intValue = retryBudget.attempts
                     reconnectToken.intValue += 1
                     currentOnReconnectScheduled.value()
+                } else {
+                    reportSessionError(error.localizedMessage ?: error.message)
                 }
-            } else {
-                currentOnPlaybackError.value(error.localizedMessage ?: error.message)
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            trace.event(PlaybackEvent.PREPARATION_TASK_CANCELLED)
+            throw cancelled
+        } finally {
+            trace.event(PlaybackEvent.PREPARATION_TASK_FINISHED)
         }
     }
 
@@ -909,6 +1056,12 @@ private fun ExoPlayerSurface(
                         handleGenericMouseMotionEvent(event, pointerTracker, currentOnInputActivity.value)
                     }
                 }
+            },
+            onReset = null,
+            onRelease = { playerView ->
+                playerView.player = null
+                playerView.setOnTouchListener(null)
+                playerView.setOnGenericMotionListener(null)
             },
             update = { playerView ->
                 playerView.player = exoPlayer
@@ -1306,17 +1459,10 @@ private fun reconnectDelayMillis(attempt: Int, xtream: Boolean = false): Long {
     return (baseDelay + jitter).coerceAtMost(maxDelay)
 }
 
-private fun channelSwitchTeardownMillis(url: String): Long {
-    return if (isXtreamStreamUrl(url) || isLikelyLiveStream(url)) {
-        ChannelSwitchTeardownXtreamMillis
-    } else {
-        ChannelSwitchTeardownMillis
-    }
-}
-
-private fun releaseVlcPlaybackSession(mediaPlayer: MediaPlayer) {
-    runCatching { mediaPlayer.stop() }
-    runCatching { mediaPlayer.media = null }
+private fun releaseVlcPlaybackSession(mediaPlayer: MediaPlayer, trace: PlaybackTrace): Boolean {
+    val stopped = runCatching { mediaPlayer.stop() }.onFailure { trace.event(PlaybackEvent.STOP_FAILED) }
+    val cleared = runCatching { mediaPlayer.media = null }.onFailure { trace.event(PlaybackEvent.STOP_FAILED) }
+    return stopped.isSuccess && cleared.isSuccess
 }
 
 private fun maxReconnectAttemptsForStream(url: String, isLive: Boolean, error: PlaybackException? = null): Int {
@@ -1454,4 +1600,16 @@ internal fun createExoLoadControlForStream(streamUrl: String): DefaultLoadContro
 
         else -> createExoLoadControl()
     }
+}
+
+private fun isPermanentPlaybackFailure(error: Throwable): Boolean {
+    var cause: Throwable? = error
+    repeat(8) {
+        val current = cause ?: return false
+        if (current is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+            return isPermanentPlaybackHttpStatus(current.responseCode)
+        }
+        cause = current.cause
+    }
+    return false
 }

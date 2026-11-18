@@ -1,176 +1,48 @@
-# miptvga
+# miptvga 2.0.0
 
-<div align="center">
-<img src="app/src/main/res/drawable/miptvga.png" alt="miptvga" width="280" />
+Aplicación IPTV para Android y Android TV escrita en Kotlin y Jetpack Compose. Permite abrir listas M3U desde una URL o un archivo local, explorar canales y grupos y reproducir contenido con LibVLC o ExoPlayer (Media3).
 
-**miptvga** · Make IPTV Great Again
-</div>
+Incluye navegación mediante mando, búsqueda, favoritos, historial de contenidos vistos, guía EPG/XMLTV y reproducción de directo y VOD. El acceso al contenido depende de la fuente y de los permisos del usuario; el repositorio no incluye listas privadas ni cuentas IPTV.
 
-Aplicación IPTV para **Android TV**, cajas Android, tablets y móviles. Carga listas **M3U** (URL o archivo local), organiza miles de canales, reproduce con **VLC** o **ExoPlayer** y se adapta al tamaño de pantalla.
+## Compilar
 
-Versión actual: **1.1** (`versionCode` 2).
+- JDK 17 o compatible con el Gradle Wrapper incluido.
+- Android SDK con plataforma 35 y las herramientas requeridas por Gradle.
+- Android Studio o terminal con acceso a los repositorios de dependencias la primera vez.
 
-## Descargar APK
+Configura la ruta del SDK en un `local.properties` propio o mediante el entorno de Android. Este archivo no se publica.
 
-El APK se publica en [**Releases**](https://github.com/entreunosyceros/miptvga/releases) de este repositorio (no va dentro del código fuente; `*.apk` está en `.gitignore`).
-
-1. Abre la [última release](https://github.com/entreunosyceros/miptvga/releases/latest).
-2. Descarga **`miptvga.apk`**.
-3. Instálalo en el televisor, caja Android o dispositivo (permite orígenes desconocidos si hace falta).
-
-También puedes compilarlo tú mismo (ver [Compilación](#compilación)).
-
-## Qué hay de nuevo en 1.1
-
-- Interfaz **adaptable** a pantallas compactas, medianas y TV (panel apilado o lateral).
-- Mejor soporte **Xtream Codes**: keep-alive configurable y reconexión más robusta.
-- Reconexión automática en streams HTTP(S) y listas remotas.
-- Panel lateral simplificado (acciones arriba, grupos y canales más claros).
-- Explorador interno de archivos para M3U/M3U8.
-- Pantallas de búsqueda, guía EPG, info de canal, ajustes y about.
-- Icono y recursos visuales actualizados.
-- Salida de build unificada como **`miptvga.apk`**.
-
-## Características
-
-- Carga listas **M3U / M3U8** por URL o archivo local.
-- Navegación por **grupos**, **búsqueda** y **favoritos** (canal y grupo).
-- **Guía EPG / XMLTV** opcional.
-- Reproducción con **LibVLC** o **Media3 ExoPlayer**.
-- Modo de compatibilidad de vídeo.
-- Fullscreen con controles OSD (play/pausa, seek / timeshift en live cuando aplica).
-- Recuerda la última lista cargada.
-- Pensada para **Leanback** (Android TV) y mando a distancia, usable también en móvil/tablet.
-
-## Stack técnico
-
-| Pieza | Detalle |
-| --- | --- |
-| Lenguaje | Kotlin |
-| UI | Jetpack Compose + Material 3 |
-| SDK | compile/target **35**, minSdk **24** |
-| Reproductores | VLC (`libvlc-all`) · Media3 ExoPlayer |
-| Red | OkHttp · monitor de red |
-| Imágenes | Coil |
-
-## Requisitos para compilar
-
-- **JDK 17** o superior
-- Android SDK local
-- Dispositivo/emulador Android TV o Android compatible
-- Gradle Wrapper del proyecto
-
-## Estructura del proyecto
-
-```text
-miptvga/
-├── app/
-│   ├── build.gradle.kts
-│   └── src/main/
-│       ├── java/com/toigo/miptvga/   # pantallas, player, parsers, Xtream…
-│       │   ├── AdaptiveLayout.kt    # métricas por tamaño de pantalla
-│       │   ├── AppScreens.kt        # UI principal
-│       │   └── ui/                  # pantallas auxiliares / componentes
-│       └── res/                     # iconos, logo, banner TV, temas
-├── gradle/
-├── build.gradle.kts
-├── settings.gradle.kts
-├── keystore.properties.example
-├── README.md
-└── .gitignore
-```
-
-## Configuración local
-
-### SDK de Android
-
-`local.properties` es local y **no** se sube al repo:
-
-```properties
-sdk.dir=/ruta/a/tu/Android/Sdk
-```
-
-### Firma release (opcional)
-
-Para un `release` firmado usa `keystore.properties` y un keystore en `keystore/` (ambos ignorados por git). Parte de `keystore.properties.example`.
-
-## Compilación
-
-### APK debug
-
-```bash
+```sh
 ./gradlew assembleDebug
+./gradlew testDebugUnitTest lintDebug
 ```
 
-Salida:
+El APK debug se genera en `app/build/outputs/apk/debug/miptvga.apk`. Los APK y los directorios de compilación no forman parte del código versionado.
 
-```text
-app/build/outputs/apk/debug/miptvga.apk
-```
+La aplicación requiere Android 7.0 (API 24) o posterior. La configuración actual empaqueta las bibliotecas nativas para ARM de 32 y 64 bits (`armeabi-v7a` y `arm64-v8a`).
 
-(`assembleDebug` copia/renombra automáticamente a `miptvga.apk`.)
+La versión Android es `2.0.0` (`versionCode = 3`). El identificador de la aplicación se mantiene: `com.toigo.miptvga`.
 
-### Tests
+## Pruebas
 
-```bash
+Las pruebas JVM están en `app/src/test/`; las pruebas Android generales, en `app/src/androidTest/`.
+
+```sh
 ./gradlew testDebugUnitTest
+./gradlew compileDebugAndroidTestKotlin
+./gradlew connectedDebugAndroidTest
 ```
 
-### APK release
+La última orden requiere un dispositivo o emulador compatible. Las pruebas JVM no certifican reproducción, vídeo, audio ni navegación física en una TV. El comportamiento con un proveedor limitado a una sesión debe comprobarse también con ese proveedor.
 
-```bash
-./gradlew assembleRelease
-```
+## Firma y configuración privada
 
-Salida:
+Para una compilación release firmada, crea un `keystore.properties` local siguiendo `keystore.properties.example` y utiliza tu propio keystore. Ninguno de esos secretos se publica. No incluyas contraseñas, tokens, listas privadas ni URLs con credenciales en código, incidencias o registros compartidos.
 
-```text
-app/build/outputs/apk/release/miptvga.apk
-```
+El repositorio conserva las configuraciones Gradle, el Wrapper, los recursos Android, el workflow de CI y las pruebas generales de regresión. Los informes provisionales, capturas y material de diagnóstico del desarrollador permanecen fuera del índice mediante exclusiones específicas en `.gitignore`.
 
-### Bundle (Play Store)
+## Licencia
 
-```bash
-./gradlew bundleRelease
-```
+El código propio de miptvga se distribuye bajo **GNU General Public License, versión 3 exclusivamente**, identificador SPDX **GPL-3.0-only**. El texto oficial íntegro está en [LICENSE](LICENSE).
 
-## Publicar el APK en GitHub
-
-Recomendado: **GitHub Releases** (no commits del binario).
-
-1. Compila el APK (`assembleDebug` o `assembleRelease`).
-2. En GitHub → **Releases** → **Draft a new release**.
-3. Etiqueta p. ej. `v1.1`, título y notas (puedes reutilizar [Qué hay de nuevo](#qué-hay-de-nuevo-en-11)).
-4. Adjunta `miptvga.apk` y publica.
-
-Los enlaces de descarga del README apuntan a `/releases` y `/releases/latest`.
-
-## Uso rápido
-
-1. Abre la app en el televisor, caja o móvil.
-2. Carga una lista M3U por **URL** o **archivo** (explorador interno o picker).
-3. Elige grupo y canal; usa **Buscar**, **Guía** o **Favoritos** si lo necesitas.
-4. En **Ajustes**: backend (VLC/ExoPlayer), EPG, keep-alive Xtream, compatibilidad de vídeo.
-5. **Fullscreen** para ver a pantalla completa.
-
-## Recursos visuales
-
-- Logo: `app/src/main/res/drawable/miptvga.png`
-- Banner TV: `app/src/main/res/drawable/tv_banner.*`
-- Launcher: `mipmap` / adaptive icons
-
-## Privacidad del repositorio
-
-No subas:
-
-- `local.properties`
-- `keystore.properties` / `*.jks` / `*.keystore` / `keystore/`
-- carpetas `build/` o `.gradle/`
-
-Los APK van en **Releases**, no en el árbol del código (están ignorados con `*.apk`).
-
-## Notas
-
-- La app declara launcher normal y **LEANBACK_LAUNCHER** para Android TV.
-- Sin firma release configurada, `assembleRelease` puede generar un APK no firmado o firmado según tu entorno.
-- Uso destinado a listas IPTV legales a las que tengas acceso legítimo.
+Las dependencias y los componentes de terceros conservan sus licencias. Consulta los [avisos y condiciones de distribución](app/src/main/assets/licenses/NOTICE.txt) y los textos legales incluidos en `app/src/main/assets/licenses/`.

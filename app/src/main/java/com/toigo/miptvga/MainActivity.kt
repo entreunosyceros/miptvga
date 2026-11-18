@@ -101,7 +101,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleKeyEvent(event: KeyEvent): Boolean {
+    internal fun handleKeyEvent(event: KeyEvent): Boolean {
         if (event.isMouseBackKey()) {
             return if (event.action == KeyEvent.ACTION_UP) {
                 handleMouseBackGesture(event.eventTime)
@@ -149,7 +149,8 @@ class MainActivity : ComponentActivity() {
 
         if (event.action == KeyEvent.ACTION_DOWN) {
             val digit = keyCodeToDigit(event.keyCode)
-            if (digit != null) {
+            if (digit != null && vm.uiState.value.currentScreen != AppScreen.SETTINGS) {
+                if (vm.uiState.value.isFullscreen && vm.uiState.value.controlsVisible) vm.showControls(true)
                 appendNumberInput(digit)
                 return true
             }
@@ -186,7 +187,7 @@ class MainActivity : ComponentActivity() {
         NavigationDiagnostics.detach(window)
         cancelPendingBackgroundClose(resetFinishRequest = false)
         unregisterShutdownReceiver()
-        PlaybackCache.releaseAndClear(applicationContext)
+        PlaybackCache.release(applicationContext)
         super.onDestroy()
     }
 
@@ -246,6 +247,11 @@ class MainActivity : ComponentActivity() {
         }
 
         lastMouseBackHandledAt = eventTime
+        val state = vm.uiState.value
+        if (state.currentScreen == AppScreen.MAIN && state.isFullscreen && state.controlsVisible) {
+            vm.showControls(false)
+            return true
+        }
         return vm.handleMouseBackAction()
     }
 
@@ -268,7 +274,7 @@ class MainActivity : ComponentActivity() {
         finishOnStopRequested = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         vm.prepareForBackgroundExit()
-        PlaybackCache.releaseAndClear(applicationContext)
+        PlaybackCache.release(applicationContext)
 
         if (!isFinishing && !isDestroyed) {
             finishAndRemoveTask()

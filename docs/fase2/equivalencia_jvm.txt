@@ -1,5 +1,0 @@
-/tmp/miptvga-nav-hqba73em/Benchmark.kt:6:72: warning: 'val id: Long' is deprecated. Deprecated in Java.
-fun bytes() = allocated.getThreadAllocatedBytes(Thread.currentThread().id)
-                                                                       ^^
-Equivalent filter cases n=100: 384 PASS
-Equivalent filter cases n=1000: 384 PASS

@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.media3.common.util.UnstableApi
 import java.io.File
 import java.util.LinkedHashMap
@@ -35,6 +37,10 @@ internal class MainViewModel(
     private val lastPlaylistStore: LastPlaylistStore,
     private val networkMonitor: NetworkMonitor
 ) : ViewModel() {
+
+    init {
+        PlaybackTrace.enabled = appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+    }
 
     private val initialEpgSettings = lastPlaylistStore.readEpgSettings()
     private val initialXtreamKeepAliveSettings = lastPlaylistStore.readXtreamKeepAliveSettings()
@@ -67,13 +73,22 @@ internal class MainViewModel(
     private var xtreamKeepAliveJob: Job? = null
     private var epgTimelinesByKey: Map<String, List<CurrentProgram>> = emptyMap()
     private var xtreamKeepAliveSignature: String? = null
+    private var playbackRequestVersion = 0L
     private var consecutivePlaybackFailures = 0
     private val backendFallbackThreshold = 3
+    private val playbackFallback = PlaybackFallbackPolicy()
 
     val isNetworkAvailable: StateFlow<Boolean> = networkMonitor.isConnected
 
     private val _storageInfo = MutableStateFlow(StorageInfo.Empty)
     val storageInfo: StateFlow<StorageInfo> = _storageInfo.asStateFlow()
+    private val storageMutex = Mutex()
+    private var storageRefreshJob: Job? = null
+    private val _maintenanceMessage = MutableStateFlow("")
+    val maintenanceMessage = _maintenanceMessage.asStateFlow()
+    private val _maintenanceBusy = MutableStateFlow(false)
+    val maintenanceBusy = _maintenanceBusy.asStateFlow()
+
 
     init {
         networkMonitor.start()
@@ -93,6 +108,26 @@ internal class MainViewModel(
                     }
                 }
                 wasConnected = connected
+            }
+        }
+        viewModelScope.launch {
+            PlaybackCache.cleanup.collect { result ->
+                if (result != null) {
+                    showMaintenanceMessage("Reproducción: ${result.label()}")
+                    if (!_maintenanceBusy.value) refreshStorageInfo()
+                }
+            }
+        }
+        viewModelScope.launch {
+            ImageLoaderConfig.cleanup.collect { result ->
+                if (result != null) {
+                    showMaintenanceMessage("Imágenes: ${result.label()}")
+                    if (!_maintenanceBusy.value) refreshStorageInfo()
+                    while (ImageLoaderConfig.cleanup.value?.status == CleanupStatus.PENDING) {
+                        delay(1_000)
+                        withContext(Dispatchers.IO) { ImageLoaderConfig.checkPendingCleanup() }
+                    }
+                }
             }
         }
         restoreLastPlaylist()
@@ -315,7 +350,8 @@ internal class MainViewModel(
         if (
             _uiState.value.selectedIndex == index &&
             _uiState.value.controlsVisible &&
-            !keepContinuousPlay
+            !keepContinuousPlay &&
+            !_uiState.value.playbackMessageIsError
         ) {
             return
         }
@@ -328,10 +364,14 @@ internal class MainViewModel(
             clearContinuousPlay(updateState = false)
         }
 
+        val newRequest = index != _uiState.value.selectedIndex || _uiState.value.playbackMessageIsError
+        if (newRequest) { consecutivePlaybackFailures = 0; playbackFallback.resetRequest() }
+        if (newRequest) PlaybackTrace(playbackRequestVersion + 1, "CONTROLLER").event(PlaybackEvent.SELECTED)
         val channel = _uiState.value.channels[index]
         val continuousActive = keepContinuousPlay && continuousPlayOriginalIndices.isNotEmpty()
         val remaining = if (continuousActive) continuousPlayRemainingFrom(index) else 0
         _uiState.value = _uiState.value.copy(
+            playbackRequestId = if (newRequest) ++playbackRequestVersion else _uiState.value.playbackRequestId,
             selectedIndex = index,
             selectedVisibleIndex = findVisibleChannelIndex(_uiState.value.filteredChannels, index),
             controlsVisible = true,
@@ -399,7 +439,8 @@ internal class MainViewModel(
         _uiState.value = _uiState.value.copy(watchedIds = updated)
     }
 
-    fun onPlaybackEnded(channelName: String) {
+    fun onPlaybackEnded(channelName: String, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
         val finishedIndex = _uiState.value.selectedIndex
         if (finishedIndex >= 0) {
             markWatched(finishedIndex)
@@ -485,8 +526,10 @@ internal class MainViewModel(
 
     fun setPlaybackBackend(backend: PlaybackBackend) {
         if (_uiState.value.playbackBackend == backend) return
+        playbackFallback.resetRequest()
         lastPlaylistStore.savePlaybackBackend(backend)
         _uiState.value = _uiState.value.copy(
+            playbackRequestId = ++playbackRequestVersion,
             playbackBackend = backend,
             controlsVisible = true,
             playbackMessage = "Backend: ${backend.displayName()}",
@@ -606,7 +649,8 @@ internal class MainViewModel(
         )
     }
 
-    fun onPlaybackStarted(channelName: String) {
+    fun onPlaybackStarted(channelName: String, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
         consecutivePlaybackFailures = 0
         _uiState.value = _uiState.value.copy(
             status = "Reproduciendo: $channelName",
@@ -617,7 +661,8 @@ internal class MainViewModel(
         restartXtreamKeepAliveIfNeeded(forceRestart = true)
     }
 
-    fun onPlaybackReconnectScheduled(channelName: String) {
+    fun onPlaybackReconnectScheduled(channelName: String, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
         _uiState.value = _uiState.value.copy(
             status = "Reconectando: $channelName",
             playbackMessage = "Reconectando la emisión... un poco de paciencia...",
@@ -627,14 +672,12 @@ internal class MainViewModel(
         )
     }
 
-    fun onPlaybackError(channelName: String, detail: String?) {
-        val selected = _uiState.value.channels.getOrNull(_uiState.value.selectedIndex)
-        val isXtream = selected?.let { isXtreamStreamUrl(it.playbackUrl) } == true
-        // Keep Xtream session alive during reconnect attempts; only stop for non-Xtream.
-        if (!isXtream) {
-            stopXtreamKeepAlive()
-        }
-        consecutivePlaybackFailures++
+    fun onPlaybackError(channelName: String, failure: PlaybackFailure, requestId: Long) {
+        if (requestId != _uiState.value.playbackRequestId || _uiState.value.selectedIndex < 0) return
+        // This callback is terminal. Keep-alive remains active during scheduled
+        // retries, but must not retain a provider slot after recovery is exhausted.
+        stopXtreamKeepAlive()
+        consecutivePlaybackFailures += failure.failures.coerceAtLeast(1)
 
         val currentBackend = _uiState.value.playbackBackend
         val alternativeBackend = when (currentBackend) {
@@ -642,14 +685,16 @@ internal class MainViewModel(
             PlaybackBackend.EXOPLAYER -> PlaybackBackend.VLC
         }
 
-        val errorMessage = detail?.takeIf { it.isNotBlank() } ?: "No se pudo reproducir este canal"
+        val errorMessage = failure.detail?.takeIf { it.isNotBlank() } ?: "No se pudo reproducir este canal"
 
-        if (consecutivePlaybackFailures >= backendFallbackThreshold) {
+        if (playbackFallback.acquire(consecutivePlaybackFailures, backendFallbackThreshold, failure.allowBackendFallback)) {
+            PlaybackTrace(playbackRequestVersion + 1, alternativeBackend.name).event(PlaybackEvent.FALLBACK)
             consecutivePlaybackFailures = 0
             val fallbackMessage = "$errorMessage · Cambiando a ${alternativeBackend.displayName()} automáticamente"
             lastPlaylistStore.savePlaybackBackend(alternativeBackend)
             _uiState.value = _uiState.value.copy(
                 status = "Fallback: $channelName → ${alternativeBackend.displayName()}",
+                playbackRequestId = ++playbackRequestVersion,
                 playbackBackend = alternativeBackend,
                 playbackMessage = fallbackMessage,
                 playbackMessageIsError = true,
@@ -673,6 +718,7 @@ internal class MainViewModel(
         val currentState = _uiState.value
         _uiState.value = currentState.copy(
             currentScreen = AppScreen.MAIN,
+            playbackRequestId = ++playbackRequestVersion,
             selectedIndex = -1,
             selectedVisibleIndex = -1,
             isFullscreen = false,
@@ -1011,6 +1057,8 @@ internal class MainViewModel(
         }
         filterJob?.cancel()
         stopXtreamKeepAlive()
+        consecutivePlaybackFailures = 0
+        playbackFallback.resetRequest()
         indexedChannels = prepared.indexedChannels
         channelsByGroupId = prepared.channelsByGroupId
         cachedGroups = prepared.groups
@@ -1019,6 +1067,7 @@ internal class MainViewModel(
         lastPlaylistStore.saveSelectedGroupId(prepared.resolvedGroupId)
 
         _uiState.value = _uiState.value.copy(
+            playbackRequestId = ++playbackRequestVersion,
             channels = channels,
             filteredChannels = prepared.filterResult.filteredChannels,
             groups = prepared.groups,
@@ -1278,38 +1327,44 @@ internal class MainViewModel(
         xtreamKeepAliveSignature = null
     }
 
-    @androidx.annotation.OptIn(UnstableApi::class)
-    fun clearPlaybackCache() {
-        viewModelScope.launch(Dispatchers.IO) {
-            PlaybackCache.releaseAndClear(appContext)
-            refreshStorageInfo()
-        }
-        showMaintenanceMessage("Caché de reproducción limpiada")
+    fun clearPlaybackCache() = performMaintenance {
+        "Reproducción: ${PlaybackCache.requestClear(appContext).label()}"
     }
 
-    fun clearImageCache() {
-        viewModelScope.launch(Dispatchers.IO) {
-            ImageLoaderConfig.clearAllCaches(appContext)
-            refreshStorageInfo()
-        }
-        showMaintenanceMessage("Caché de imágenes limpiada")
+    fun clearImageCache() = performMaintenance {
+        "Imágenes: ${ImageLoaderConfig.clearForMaintenance(appContext).label()}"
     }
 
-    @androidx.annotation.OptIn(UnstableApi::class)
-    fun clearAllCache() {
+    fun clearAllCache() = performMaintenance { clearCacheCategories() }
+
+    private fun clearCacheCategories(): String {
+        val playback = PlaybackCache.requestClear(appContext)
+        val images = ImageLoaderConfig.clearForMaintenance(appContext)
+        val temporary = CacheFiles().clear(appContext.cacheDir, OwnedCacheDirectories)
+        return "Reproducción: ${playback.label()}\nImágenes: ${images.label()}\nTemporales: ${temporary.label()}"
+    }
+
+    private fun performMaintenance(operation: () -> String) {
+        if (_maintenanceBusy.value) return
+        _maintenanceBusy.value = true
+        _maintenanceMessage.value = "Mantenimiento en curso…"
         viewModelScope.launch(Dispatchers.IO) {
-            PlaybackCache.releaseAndClear(appContext)
-            ImageLoaderConfig.clearAllCaches(appContext)
-            clearGeneralAppCache()
-            refreshStorageInfo()
+            try {
+                storageMutex.withLock {
+                    val message = try { operation() } catch (_: Exception) { "Error de mantenimiento; operación no completada" }
+                    val snapshot = storageSnapshot()
+                    currentCoroutineContext().ensureActive()
+                    _storageInfo.value = snapshot
+                    showMaintenanceMessage(message)
+                }
+            } finally { _maintenanceBusy.value = false }
         }
-        showMaintenanceMessage("Todo el caché ha sido limpiado")
     }
 
     fun resetPreferences() {
         cancelSessionTasks()
         lastPlaylistStore.clearAll()
-        val clearedState = UiState()
+        val clearedState = UiState(playbackRequestId = ++playbackRequestVersion)
         _uiState.value = clearedState
         indexedChannels = emptyList()
         channelsByGroupId = emptyMap()
@@ -1321,57 +1376,30 @@ internal class MainViewModel(
         showMaintenanceMessage("Preferencias restablecidas")
     }
 
-    @androidx.annotation.OptIn(UnstableApi::class)
     fun resetApp() {
-        viewModelScope.launch(Dispatchers.IO) {
-            PlaybackCache.releaseAndClear(appContext)
-            ImageLoaderConfig.clearAllCaches(appContext)
-            clearGeneralAppCache()
-        }
+        if (_maintenanceBusy.value) return
+        // Only reached after the existing explicit destructive confirmation.
         resetPreferences()
-        refreshStorageInfo()
-        showMaintenanceMessage("Aplicación restablecida por completo")
+        performMaintenance { "Preferencias restablecidas.\n${clearCacheCategories()}" }
     }
 
-    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun storageSnapshot(): StorageInfo = try { readCacheStorage(appContext.cacheDir) }
+        catch (_: Exception) { StorageInfo(StorageSize.Error, StorageSize.Error, StorageSize.Error) }
+
     fun refreshStorageInfo() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val playbackCacheSize = PlaybackCache.cacheSizeBytes(appContext)
-            val imageCacheSize = ImageLoaderConfig.diskCacheSizeBytes(appContext)
-            val appCacheSize = calculateAppCacheSize()
-            _storageInfo.value = StorageInfo(
-                playbackCacheBytes = playbackCacheSize,
-                imageCacheBytes = imageCacheSize,
-                appCacheBytes = appCacheSize,
-                totalBytes = playbackCacheSize + imageCacheSize + appCacheSize
-            )
-        }
-    }
-
-    private fun calculateAppCacheSize(): Long {
-        val cacheDir = appContext.cacheDir ?: return 0L
-        return cacheDir.walkTopDown()
-            .filter { it.isFile }
-            .filter { !it.absolutePath.contains("media_stream_cache") }
-            .filter { !it.absolutePath.contains("coil_image_cache") }
-            .sumOf { it.length() }
-    }
-
-    private fun clearGeneralAppCache() {
-        val cacheDir = appContext.cacheDir ?: return
-        cacheDir.listFiles()?.forEach { file ->
-            if (file.name != "media_stream_cache" && file.name != "coil_image_cache") {
-                file.deleteRecursively()
+        storageRefreshJob?.cancel()
+        _storageInfo.value = StorageInfo.Empty
+        storageRefreshJob = viewModelScope.launch(Dispatchers.IO) {
+            storageMutex.withLock {
+                val snapshot = storageSnapshot()
+                currentCoroutineContext().ensureActive()
+                _storageInfo.value = snapshot
             }
         }
     }
 
     private fun showMaintenanceMessage(message: String) {
-        _uiState.value = _uiState.value.copy(
-            playbackMessage = message,
-            playbackMessageIsError = false,
-            controlsVisible = true
-        )
+        _maintenanceMessage.value = message
     }
 
     private fun cancelSessionTasks() {

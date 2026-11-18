@@ -78,25 +78,25 @@ internal val TvSafeAreaPadding = PaddingValues(horizontal = 18.dp, vertical = 12
 
 // ── Color constants ─────────────────────────────────────────────────────────────
 
-internal val AppBackgroundColor = Color(0xFF080B10)
-internal val PanelColor = Color(0xFF11161D)
+internal val AppBackgroundColor = Color(0xFF0D1117)
+internal val PanelColor = Color(0xFF151D29)
 internal val PanelColorElevated = Color(0xFF1A2230)
 internal val PanelBorderColor = Color(0xFF314052)
-internal val ChannelRowColor = Color(0xFF121923)
-internal val ChannelRowSelectedColor = Color(0xFF1E5C91)
+internal val ChannelRowColor = Color(0xFF1B2635)
+internal val ChannelRowSelectedColor = Color(0xFF20443E)
 internal val ButtonSecondaryColor = Color(0xFF233345)
-internal val PrimaryButtonColor = Color(0xFF2F89D5)
-internal val SecondaryTextColor = Color(0xFF9AAABD)
+internal val PrimaryButtonColor = Color(0xFF226E61)
+internal val SecondaryTextColor = Color(0xFFB6C2D1)
 internal val MutedTextColor = Color(0xFFDCE5EF)
 internal val InputBackgroundColor = Color(0xFF0D1118)
 internal val PlayerOverlayColor = Color(0xE60C1016)
 internal val StatusChipColor = Color(0xFF18212C)
-internal val StatusChipAccentColor = Color(0xFF214F79)
+internal val StatusChipAccentColor = Color(0xFF20443E)
 internal val SearchStripColor = Color(0xFF10161E)
 internal val GroupSectionColor = Color(0xFF0D131B)
-internal val FocusHighlightColor = Color(0xFF4DA6FF)
-internal val FocusedPrimaryColor = Color(0xFF3A9BE8)
-internal val FocusedSecondaryColor = Color(0xFF2A4460)
+internal val FocusHighlightColor = Color(0xFFBDF7E8)
+internal val FocusedPrimaryColor = Color(0xFF287365)
+internal val FocusedSecondaryColor = Color(0xFF29443F)
 
 // ── Shape constants ─────────────────────────────────────────────────────────────
 

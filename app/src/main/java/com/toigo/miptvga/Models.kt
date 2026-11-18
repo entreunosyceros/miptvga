@@ -150,6 +150,7 @@ internal data class EpgUiState(
 
 @Immutable
 internal data class UiState(
+    val playbackRequestId: Long = 0L,
     val channels: List<Channel> = emptyList(),
     val filteredChannels: List<ChannelListEntry> = emptyList(),
     val groups: List<ChannelGroup> = emptyList(),
@@ -425,31 +426,6 @@ internal fun XtreamKeepAliveSettings.statusLabel(): String {
         "Keepalive Xtream activo · ${safeSettings.intervalSeconds}s"
     } else {
         "Keepalive Xtream desactivado"
-    }
-}
-
-@Immutable
-internal data class StorageInfo(
-    val playbackCacheBytes: Long = 0L,
-    val imageCacheBytes: Long = 0L,
-    val appCacheBytes: Long = 0L,
-    val totalBytes: Long = 0L
-) {
-    companion object {
-        val Empty = StorageInfo()
-    }
-}
-
-internal fun Long.formatStorageSize(): String {
-    if (this <= 0L) return "0 B"
-    val kb = this / 1024.0
-    val mb = kb / 1024.0
-    val gb = mb / 1024.0
-    return when {
-        gb >= 1.0 -> "%.1f GB".format(gb)
-        mb >= 1.0 -> "%.1f MB".format(mb)
-        kb >= 1.0 -> "%.1f KB".format(kb)
-        else -> "$this B"
     }
 }
 
